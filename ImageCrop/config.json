@@ -1,0 +1,10 @@
+{
+  "SourcePath": "C:\\Users\\33913\\Downloads\\Input",
+  "OutputPath": "C:\\Users\\33913\\Downloads\\Output",
+  "DefaultAnchor": "Center",
+  "Ratios": {
+    "9x16": "9:16",
+    "2x3": "2:3",
+    "1x1": "1:1"
+  }
+}
