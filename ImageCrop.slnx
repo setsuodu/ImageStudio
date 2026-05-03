@@ -1,0 +1,5 @@
+<Solution>
+  <Project Path="ImageCrop.Console/ImageCrop.Console.csproj" />
+  <Project Path="ImageCrop.Core/ImageCrop.Core.csproj" />
+  <Project Path="ImageCrop.Web/ImageCrop.Web.csproj" />
+</Solution>

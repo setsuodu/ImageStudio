@@ -1,22 +1,20 @@
 ﻿using SixLabors.ImageSharp;
 using SixLabors.ImageSharp.Processing;
 
+namespace ImageCrop.Core;
+
 public static class ImageSharpExtensions
 {
     public static Image CropWithAnchor(this Image image, string ratio, AnchorMode anchor)
     {
         var parts = ratio.Split(':');
-        if (parts.Length != 2 || !float.TryParse(parts[0], out float rw) || !float.TryParse(parts[1], out float rh))
-            return image.Clone(_ => { });
-
-        float targetRatio = rw / rh;
+        float targetRatio = float.Parse(parts[0]) / float.Parse(parts[1]);
 
         return image.Clone(ctx =>
         {
             Size size = ctx.GetCurrentSize();
             int cropWidth, cropHeight;
 
-            // 计算比例尺寸
             if (targetRatio < (float)size.Width / size.Height)
             {
                 cropHeight = size.Height;
@@ -28,12 +26,11 @@ public static class ImageSharpExtensions
                 cropHeight = (int)(size.Width / targetRatio);
             }
 
-            // 实现锚点偏好
             int x = anchor switch
             {
                 AnchorMode.Left => 0,
                 AnchorMode.Right => size.Width - cropWidth,
-                _ => (size.Width - cropWidth) / 2 // Center[cite: 1]
+                _ => (size.Width - cropWidth) / 2
             };
             int y = (size.Height - cropHeight) / 2;
 
@@ -41,5 +38,3 @@ public static class ImageSharpExtensions
         });
     }
 }
-
-public enum AnchorMode { Left, Center, Right }
