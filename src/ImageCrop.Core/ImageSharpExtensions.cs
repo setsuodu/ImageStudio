@@ -10,7 +10,6 @@ namespace ImageCrop.Core;
 
 public static class ImageSharpExtensions
 {
-    // 找回你原来的所有逻辑：裁切、缩放、多格式支持
     public static Image CropWithAnchor(this Image image, string ratio, AnchorMode anchor)
     {
         var parts = ratio.Split(':');
@@ -44,11 +43,33 @@ public static class ImageSharpExtensions
         });
     }
 
-    public static Image Scale(this Image image, float scale)
+    // 新增：按最长边缩放（16/32/64...1024 专用）
+    public static Image ScaleToMaxSide(this Image image, int maxSide)
     {
-        return image.Clone(ctx => {
-            Size size = ctx.GetCurrentSize();
-            ctx.Resize((int)(size.Width * scale), (int)(size.Height * scale), KnownResamplers.Lanczos3);
+        return image.Clone(ctx =>
+        {
+            var original = ctx.GetCurrentSize();
+            int originalMax = Math.Max(original.Width, original.Height);
+
+            if (originalMax == 0)
+            {
+                ctx.Resize(maxSide, maxSide, KnownResamplers.Lanczos3);
+                return;
+            }
+
+            // 使用 double 提高精度 + 四舍五入
+            double ratio = (double)maxSide / originalMax;
+
+            int newWidth = (int)Math.Round(original.Width * ratio);
+            int newHeight = (int)Math.Round(original.Height * ratio);
+
+            // 兜底：强制让最长边正好等于 maxSide
+            if (newWidth > newHeight)
+                newWidth = maxSide;
+            else
+                newHeight = maxSide;
+
+            ctx.Resize(newWidth, newHeight, KnownResamplers.Lanczos3);
         });
     }
 
