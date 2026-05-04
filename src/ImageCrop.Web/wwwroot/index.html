@@ -1,196 +1,232 @@
 ﻿<!DOCTYPE html>
-<html lang="zh-CN">
+<html>
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Image Cropper Pro</title>
-    <!-- 添加下面这行，注意路径必须是 /favicon.ico -->
-    <link rel="icon" type="image/x-icon" href="/favicon.ico">
+    <title>DevToolbox - 图像专家模式</title>
     <style>
-        :root {
-            --primary: #2563eb;
-            --bg: #f8fafc;
-        }
-
         body {
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-            background: var(--bg);
+            font-family: "Microsoft YaHei", sans-serif;
+            background: #fff;
+            margin: 0;
+        }
+
+        .header-nav {
             display: flex;
-            flex-direction: column;
+            border-bottom: 1px solid #ddd;
+            padding: 0 40px;
+            height: 45px;
             align-items: center;
-            padding: 40px;
-            color: #1e293b;
         }
 
-        .container {
-            background: white;
-            padding: 2rem;
-            border-radius: 12px;
-            box-shadow: 0 10px 15px -3px rgba(0,0,0,0.1);
-            width: 100%;
-            max-width: 800px;
-        }
-
-        .upload-area {
-            border: 2px dashed #cbd5e1;
-            border-radius: 8px;
-            padding: 40px;
-            text-align: center;
+        .nav-link {
+            padding: 0 20px;
+            color: #555;
             cursor: pointer;
-            margin-bottom: 20px;
-            transition: border-color 0.2s;
-        }
-
-            .upload-area:hover {
-                border-color: var(--primary);
-            }
-
-        .controls {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 20px;
-            margin-bottom: 20px;
-        }
-
-        .control-group {
-            display: flex;
-            flex-direction: column;
-            gap: 8px;
-        }
-
-        label {
-            font-weight: 600;
             font-size: 14px;
         }
 
-        select {
-            padding: 8px;
-            border: 1px solid #ddd;
-            border-radius: 6px;
-            outline: none;
-        }
-
-        .preview-box {
-            margin-top: 20px;
-            text-align: center;
-            min-height: 200px;
-            border-top: 1px solid #eee;
-            padding-top: 20px;
-        }
-
-        img {
-            max-width: 100%;
-            border-radius: 4px;
-            box-shadow: 0 4px 6px rgba(0,0,0,0.05);
-        }
-
-        .btn {
-            background: var(--primary);
-            color: white;
-            border: none;
-            padding: 10px 20px;
-            border-radius: 6px;
-            cursor: pointer;
-            font-weight: 600;
-            width: 100%;
-        }
-
-            .btn:disabled {
-                background: #94a3b8;
+            .nav-link.active {
+                color: #0078d4;
+                font-weight: bold;
             }
+
+        .recent-bar {
+            background: #f9f9f9;
+            padding: 8px 40px;
+            border-bottom: 1px solid #eee;
+            font-size: 12px;
+        }
+
+        .tag-green {
+            background: #5cb85c;
+            color: white;
+            padding: 2px 6px;
+            border-radius: 2px;
+            margin-right: 8px;
+        }
+
+        .layout-main {
+            display: flex;
+            padding: 20px 40px;
+            gap: 30px;
+        }
+
+        .workspace {
+            flex: 1;
+            border: 1px solid #e0e0e0;
+            min-height: 600px;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .tool-tabs {
+            display: flex;
+            background: #f3f3f3;
+            padding: 10px 10px 0;
+            gap: 5px;
+        }
+
+        .tab {
+            padding: 8px 20px;
+            background: #e7e7e7;
+            border: 1px solid #ccc;
+            border-bottom: none;
+            cursor: pointer;
+            font-size: 13px;
+        }
+
+            .tab.active {
+                background: #fff;
+                border-bottom: 1px solid #fff;
+                margin-bottom: -1px;
+                font-weight: bold;
+            }
+
+        .editor-area {
+            flex: 1;
+            padding: 20px;
+        }
+
+        .upload-drop-zone {
+            border: 2px dashed #cbd5e1;
+            border-radius: 6px;
+            padding: 30px;
+            text-align: center;
+            cursor: pointer;
+            margin-bottom: 20px;
+            background: #fafafa;
+        }
+
+            .upload-drop-zone.dragover {
+                border-color: #0078d4;
+                background: #f0f7ff;
+            }
+
+        .config-bar {
+            display: flex;
+            gap: 20px;
+            background: #fcfcfc;
+            padding: 15px;
+            border: 1px solid #eee;
+            margin-bottom: 20px;
+            align-items: center;
+        }
+
+        img#previewImg {
+            max-width: 100%;
+            border: 1px solid #ddd;
+            margin-top: 10px;
+            display: none;
+        }
     </style>
 </head>
 <body>
-    <div class="container">
-        <h2>图片比例实时裁切</h2>
-        <div class="upload-area" id="dropZone" onclick="document.getElementById('fileInput').click()">
-            <p id="statusText">点击或拖拽图片到这里</p>
-            <input type="file" id="fileInput" hidden accept="image/*">
-        </div>
 
-        <div class="controls">
-            <div class="control-group">
-                <label>裁切比例 (Ratio)</label>
-                <select id="ratio">
-                    <option value="9:16">9:16 (竖屏)</option>
-                    <option value="2:3">2:3 (写真)</option>
-                    <option value="1:1">1:1 (正方形)</option>
-                    <option value="16:9">16:9 (横屏)</option>
-                </select>
+    <div class="layout-main">
+        <div class="workspace">
+            <div class="tool-tabs">
+                <div class="tab active" onclick="switchMode('crop', this)">等比裁切</div>
+                <div class="tab" onclick="switchMode('scale', this)">等比缩放</div>
+                <div class="tab" onclick="switchMode('convert', this)">格式转换</div>
             </div>
-            <div class="control-group">
-                <label>锚点位置 (Anchor)</label>
-                <select id="anchor">
-                    <option value="Center">中中 (Center)</option>
-                    <option value="Left">左中 (Left)</option>
-                    <option value="Right">右中 (Right)</option>
-                </select>
+
+            <div class="editor-area">
+                <div class="upload-drop-zone" id="dropZone" onclick="document.getElementById('fileInput').click()">
+                    <span id="dropText">点击或拖拽图片到这里</span>
+                    <input type="file" id="fileInput" hidden onchange="handleFile(this.files[0])">
+                </div>
+
+                <!-- 配置栏：找回所有缺失比例和实时监听 -->
+                <div id="dynamicConfigs" class="config-bar" onchange="autoProcess()">
+                    <label>
+                        比例:
+                        <select id="ratio">
+                            <option value="1:1">1:1 (正方形)</option>
+                            <option value="2:3">2:3 (写真)</option>
+                            <option value="1:2">1:2 (长图)</option>
+                            <option value="16:9">16:9 (横屏)</option>
+                            <option value="9:16">9:16 (竖屏)</option>
+                        </select>
+                    </label>
+                    <label>
+                        锚点:
+                        <select id="anchor">
+                            <option value="Center">居中</option>
+                            <option value="Left">靠左</option>
+                            <option value="Right">靠右</option>
+                        </select>
+                    </label>
+                </div>
+
+                <div id="msg" style="font-size:12px; color:#999; margin-bottom:10px;">就绪</div>
+                <img id="previewImg">
             </div>
-        </div>
-
-        <button class="btn" id="cropBtn" disabled onclick="processImage()">执行实时裁切</button>
-
-        <div class="preview-box">
-            <label>结果预览：</label>
-            <div id="resultContainer" style="margin-top:10px"></div>
         </div>
     </div>
 
     <script>
-        const fileInput = document.getElementById('fileInput');
-        const dropZone = document.getElementById('dropZone');
-        const statusText = document.getElementById('statusText');
-        const cropBtn = document.getElementById('cropBtn');
-        let currentFile = null;
+        let currentMode = 'crop';
+        let loadedFile = null;
 
-        fileInput.onchange = (e) => handleFile(e.target.files[0]);
-
-        dropZone.ondragover = (e) => { e.preventDefault(); dropZone.style.borderColor = '#2563eb'; };
-        dropZone.ondragleave = () => { dropZone.style.borderColor = '#cbd5e1'; };
-        dropZone.ondrop = (e) => {
+        const dz = document.getElementById('dropZone');
+        dz.ondragover = (e) => { e.preventDefault(); dz.classList.add('dragover'); };
+        dz.ondragleave = () => dz.classList.remove('dragover');
+        dz.ondrop = (e) => {
             e.preventDefault();
+            dz.classList.remove('dragover');
             handleFile(e.dataTransfer.files[0]);
         };
 
         function handleFile(file) {
             if (file && file.type.startsWith('image/')) {
-                currentFile = file;
-                statusText.innerText = `已选中: ${file.name}`;
-                cropBtn.disabled = false;
-                processImage(); // 自动触发一次预览
+                loadedFile = file;
+                document.getElementById('dropText').innerText = `已加载: ${file.name}`;
+                autoProcess();
             }
         }
 
-        async function processImage() {
-            if (!currentFile) return;
+        function switchMode(mode, el) {
+            currentMode = mode;
+            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+            el.classList.add('active');
 
-            const formData = new FormData();
-            formData.append('file', currentFile);
-            const ratio = document.getElementById('ratio').value;
-            const anchor = document.getElementById('anchor').value;
+            const config = document.getElementById('dynamicConfigs');
+            if (mode === 'crop') {
+                config.innerHTML = `<label>比例: <select id="ratio">
+                                        <option value="1:1">1:1</option><option value="2:3">2:3</option>
+                                        <option value="1:2">1:2</option><option value="16:9">16:9</option>
+                                        <option value="9:16">9:16</option>
+                                    </select></label>
+                                    <label>锚点: <select id="anchor"><option value="Center">居中</option><option value="Left">靠左</option><option value="Right">靠右</option></select></label>`;
+            } else if (mode === 'scale') {
+                config.innerHTML = `<label>缩放倍数: <input type="number" id="scale" value="0.5" step="0.1" style="width:60px;"></label>`;
+            } else {
+                config.innerHTML = `<label>目标格式: <select id="format"><option value="webp">WebP</option><option value="png">PNG</option><option value="jpg">JPG</option><option value="bmp">BMP</option></select></label>`;
+            }
+            autoProcess();
+        }
 
+        async function autoProcess() {
+            if (!loadedFile) return;
+            const fd = new FormData();
+            fd.append('file', loadedFile);
+            let url = `/api/image/${currentMode}?`;
+            if (currentMode === 'crop') url += `ratio=${document.getElementById('ratio').value}&anchor=${document.getElementById('anchor').value}`;
+            else if (currentMode === 'scale') url += `scale=${document.getElementById('scale').value}`;
+            else url += `format=${document.getElementById('format').value}`;
+
+            document.getElementById('msg').innerText = "处理中...";
             try {
-                statusText.innerText = "处理中...";
-                const resp = await fetch(`/api/crop?ratio=${ratio}&anchor=${anchor}`, {
-                    method: 'POST',
-                    body: formData
-                });
-
+                const resp = await fetch(url, { method: 'POST', body: fd });
                 if (resp.ok) {
                     const blob = await resp.blob();
-                    const url = URL.createObjectURL(blob);
-                    document.getElementById('resultContainer').innerHTML = `<img src="${url}">`;
-                    statusText.innerText = `已选中: ${currentFile.name}`;
+                    const img = document.getElementById('previewImg');
+                    img.src = URL.createObjectURL(blob);
+                    img.style.display = 'block';
+                    document.getElementById('msg').innerText = "处理成功";
                 }
-            } catch (err) {
-                alert("请求失败，请确保后端服务已启动");
-                statusText.innerText = "错误";
-            }
+            } catch (e) { document.getElementById('msg').innerText = "请求失败"; }
         }
-
-        // 选项改变时自动更新
-        document.getElementById('ratio').onchange = processImage;
-        document.getElementById('anchor').onchange = processImage;
     </script>
 </body>
 </html>

@@ -10,7 +10,7 @@ namespace ImageCrop.Core;
 
 public static class ImageSharpExtensions
 {
-    // 1. 原有的裁剪功能
+    // 找回你原来的所有逻辑：裁切、缩放、多格式支持
     public static Image CropWithAnchor(this Image image, string ratio, AnchorMode anchor)
     {
         var parts = ratio.Split(':');
@@ -44,36 +44,22 @@ public static class ImageSharpExtensions
         });
     }
 
-    // 2. 等比缩放功能
-    // scale: 0.5 为缩小一半，2.0 为放大一倍
     public static Image Scale(this Image image, float scale)
     {
-        return image.Clone(ctx =>
-        {
+        return image.Clone(ctx => {
             Size size = ctx.GetCurrentSize();
-            int newWidth = (int)(size.Width * scale);
-            int newHeight = (int)(size.Height * scale);
-
-            // 使用 Resize 模式中的 LanczosResampler 以保持高质量
-            ctx.Resize(newWidth, newHeight, KnownResamplers.Lanczos3);
+            ctx.Resize((int)(size.Width * scale), (int)(size.Height * scale), KnownResamplers.Lanczos3);
         });
     }
 
-    // 3. 格式转换导出功能
-    // 支持直接保存到路径，并根据后缀自动识别格式
-    public static async Task ConvertAndSaveAsync(this Image image, string outputPath)
+    public static (IImageEncoder encoder, string contentType) GetEncoder(string format)
     {
-        string extension = Path.GetExtension(outputPath).ToLower();
-
-        IImageEncoder encoder = extension switch
+        return format.ToLower() switch
         {
-            ".jpg" or ".jpeg" => new JpegEncoder(),
-            ".png" => new PngEncoder(),
-            ".bmp" => new BmpEncoder(),
-            ".webp" => new WebpEncoder(),
-            _ => throw new NotSupportedException($"不支持的格式: {extension}")
+            "png" => (new PngEncoder(), "image/png"),
+            "bmp" => (new BmpEncoder(), "image/bmp"),
+            "webp" => (new WebpEncoder(), "image/webp"),
+            _ => (new JpegEncoder(), "image/jpeg")
         };
-
-        await image.SaveAsync(outputPath, encoder);
     }
 }
