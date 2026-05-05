@@ -5,6 +5,7 @@ using SixLabors.ImageSharp.Formats.Jpeg;
 using SixLabors.ImageSharp.Formats.Png;
 using SixLabors.ImageSharp.Formats.Webp;
 using SixLabors.ImageSharp.Processing;
+using QRCoder;
 
 namespace ImageCrop.Core;
 
@@ -82,5 +83,38 @@ public static class ImageSharpExtensions
             "webp" => (new WebpEncoder(), "image/webp"),
             _ => (new JpegEncoder(), "image/jpeg")
         };
+    }
+
+    /// <summary>
+    /// 生成二维码（返回 ImageSharp Image）
+    /// </summary>
+    public static Image GenerateQRCode(
+    string text,
+    int targetSize = 512,
+    QRCodeGenerator.ECCLevel eccLevel = QRCodeGenerator.ECCLevel.Q,
+    string darkColor = "#000000",
+    string lightColor = "#FFFFFF")
+    {
+        if (string.IsNullOrWhiteSpace(text))
+            throw new ArgumentException("QR Code text cannot be empty");
+
+        targetSize = Math.Clamp(targetSize, 128, 2000);
+
+        using var qrGenerator = new QRCodeGenerator();
+        using var qrCodeData = qrGenerator.CreateQrCode(text, eccLevel);
+        using var qrCode = new QRCode(qrCodeData);
+
+        // 关键：严格按目标尺寸生成
+        int pixelsPerModule = Math.Max(1, targetSize / (qrCodeData.ModuleMatrix.Count + 8));
+
+        var qrImage = qrCode.GetGraphic(pixelsPerModule, darkColor, lightColor, true);
+
+        // 最终强制缩放到精确尺寸
+        if (qrImage.Width != targetSize || qrImage.Height != targetSize)
+        {
+            qrImage = qrImage.Clone(x => x.Resize(targetSize, targetSize, KnownResamplers.Lanczos3));
+        }
+
+        return qrImage;
     }
 }

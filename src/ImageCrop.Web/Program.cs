@@ -1,4 +1,5 @@
 using ImageCrop.Core;
+using QRCoder;
 using SixLabors.ImageSharp;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -73,4 +74,29 @@ async Task<IResult> ToFileResult(Image img, string format)
     ms.Position = 0;
     return Results.File(ms, contentType, $"output.{format}");
 }
+
+// 二维码
+app.MapGet("/api/image/qrcode", async (HttpContext context) => {
+    var text = context.Request.Query["text"].ToString();
+    if (string.IsNullOrWhiteSpace(text))
+        return Results.BadRequest("缺少 text 参数");
+
+    int size = 512;
+    int.TryParse(context.Request.Query["size"].ToString(), out size);
+
+    var eccStr = context.Request.Query["ecc"].ToString()?.ToUpper() ?? "Q";
+    var eccLevel = eccStr switch
+    {
+        "L" => QRCodeGenerator.ECCLevel.L,
+        "M" => QRCodeGenerator.ECCLevel.M,
+        "Q" => QRCodeGenerator.ECCLevel.Q,
+        "H" => QRCodeGenerator.ECCLevel.H,
+        _ => QRCodeGenerator.ECCLevel.Q
+    };
+
+    using var qrImage = ImageSharpExtensions.GenerateQRCode(text, size, eccLevel);
+
+    return await ToFileResult(qrImage, "png");
+});
+
 app.Run();
