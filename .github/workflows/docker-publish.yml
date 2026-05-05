@@ -44,8 +44,8 @@ jobs:
           context: .
           file: src/ImageCrop.Web/Dockerfile # 指向你改好的那个 Dockerfile
           push: true
-          tags: ${{ id.meta.outputs.tags }}
-          labels: ${{ id.meta.outputs.labels }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
           # 这一行开启缓存加速，下次构建快得飞起
           cache-from: type=gha
           cache-to: type=gha,mode=max
