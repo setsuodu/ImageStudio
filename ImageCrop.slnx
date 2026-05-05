@@ -1,4 +1,7 @@
 <Solution>
+  <Project Path="docker-compose.dcproj">
+    <Build />
+  </Project>
   <Project Path="src/ImageCrop.Console/ImageCrop.Console.csproj" />
   <Project Path="src/ImageCrop.Core/ImageCrop.Core.csproj" />
   <Project Path="src/ImageCrop.Web/ImageCrop.Web.csproj" />

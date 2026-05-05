@@ -1,6 +1,6 @@
-using ImageCrop.Core;
 using QRCoder;
 using SixLabors.ImageSharp;
+using ImageCrop.Core;
 
 var builder = WebApplication.CreateBuilder(args);
 var app = builder.Build();

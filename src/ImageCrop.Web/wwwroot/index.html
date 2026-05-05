@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <title>DevToolbox - 图像专家模式</title>
     <style>
-        /* 严格锁定 origin.html 的所有原始样式，禁止任何数值篡改[cite: 4] */
+        /* 严格锁定 origin.html 的所有原始样式，禁止任何数值篡改 */
         body {
             font-family: "Microsoft YaHei", sans-serif;
             background: #fff;
@@ -51,7 +51,7 @@
             padding: 20px 40px;
             gap: 30px;
         }
-        /* 锁定 600px 原始高度，不准改 650px[cite: 4] */
+        /* 锁定 600px 原始高度，不准改 650px */
         .workspace {
             flex: 1;
             border: 1px solid #e0e0e0;
@@ -120,7 +120,7 @@
             display: none;
         }
 
-        /* 二维码专用容器 - 仅在点击 Tab 时显示[cite: 3] */
+        /* 二维码专用容器 - 仅在点击 Tab 时显示 */
         #qrcode-ui {
             display: none;
             text-align: center;
@@ -143,12 +143,12 @@
                 <div class="tab active" onclick="switchMode('crop', this)">等比裁切</div>
                 <div class="tab" onclick="switchMode('scale', this)">等比缩放</div>
                 <div class="tab" onclick="switchMode('convert', this)">格式转换</div>
-                <!-- 注入二维码 Tab[cite: 3] -->
+                <!-- 注入二维码 Tab -->
                 <div class="tab" onclick="switchMode('qrcode', this)">二维码生成</div>
             </div>
 
             <div class="editor-area">
-                <!-- 原有图像处理 UI[cite: 4] -->
+                <!-- 原有图像处理 UI -->
                 <div id="image-process-ui">
                     <div class="upload-drop-zone" id="dropZone" onclick="document.getElementById('fileInput').click()">
                         <span id="dropText">点击或拖拽图片到这里</span>
@@ -159,7 +159,7 @@
                     <img id="previewImg">
                 </div>
 
-                <!-- 注入二维码专属 UI[cite: 3] -->
+                <!-- 注入二维码专属 UI -->
                 <div id="qrcode-ui">
                     <div class="config-bar" style="justify-content: center;">
                         <input type="text" id="qrText" value="https://example.com" style="width:300px; padding:8px;">
@@ -195,7 +195,7 @@
                 imgUI.style.display = 'block';
                 qrUI.style.display = 'none';
 
-                // 100% 还原 origin.html 的所有选项逻辑，一行不差[cite: 4]
+                // 100% 还原 origin.html 的所有选项逻辑，一行不差
                 if (mode === 'crop') {
                     config.innerHTML = `<label>比例: <select id="ratio">
                             <option value="1:1">1:1 (正方形)</option>
@@ -217,7 +217,7 @@
             }
         }
 
-        // 注入二维码逻辑[cite: 3]
+        // 注入二维码逻辑
         function generateQR() {
             const text = document.getElementById('qrText').value;
             const size = document.getElementById('qrSize').value;
@@ -227,7 +227,7 @@
             document.getElementById('qrHint').style.display = 'none';
         }
 
-        // 以下全部为 origin.html 的原始交互逻辑[cite: 4]
+        // 以下全部为 origin.html 的原始交互逻辑
         const dz = document.getElementById('dropZone');
         dz.ondragover = (e) => { e.preventDefault(); dz.classList.add('dragover'); };
         dz.ondragleave = () => dz.classList.remove('dragover');

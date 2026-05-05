@@ -1,0 +1,8 @@
+services:
+  imagecrop.web:
+    image: ${DOCKER_REGISTRY-}imagecropweb
+    build:
+      context: .
+      dockerfile: src/ImageCrop.Web/Dockerfile
+    ports:
+      - "8070:8070"  # 宿主机 8070 映射容器内 8070，这下谁看都不奇怪了

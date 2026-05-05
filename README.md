@@ -12,3 +12,16 @@
 
 - Console
 - Web
+
+## 编译
+
+> 说明： vs 启动项目切到docker，会多编译出一个 :dev标签的项目。 切到 Web 正常。
+
+docker build -t imagecrop-web:latest -f src/ImageCrop.Web/Dockerfile .
+
+## 部署
+
+docker run -d \
+  -p 8070:8070 \
+  --name imagecrop-app \
+  imagecrop-web:latest
