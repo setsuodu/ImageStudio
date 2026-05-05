@@ -46,6 +46,6 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          # 这一行开启缓存加速，下次构建快得飞起
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          # 这一行开启缓存加速，下次构建快得飞起（👈其实直接报错）
+          #cache-from: type=gha
+          #cache-to: type=gha,mode=max
