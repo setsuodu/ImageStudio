@@ -2,7 +2,7 @@ name: Build and Push Docker Image
 
 on:
   push:
-    branches: [ "main", "master" ] # 当你推送到主分支时触发
+    #branches: [ "main", "master" ] # 普通开发不触发，发版本👇才触发
     tags: [ "v*" ] # 👈 增加这一行，确保你推送 v 开头的 tag 时也会触发
 
 env:
