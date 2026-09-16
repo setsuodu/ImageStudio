@@ -5,9 +5,12 @@ using SixLabors.ImageSharp.Formats.Jpeg;
 using SixLabors.ImageSharp.Formats.Png;
 using SixLabors.ImageSharp.Formats.Webp;
 using SixLabors.ImageSharp.Processing;
+using SixLabors.ImageSharp.PixelFormats;
 using QRCoder;
 
 namespace ImageCrop.Core;
+
+public record GridCell(int X, int Y, int Width, int Height);
 
 public static class ImageSharpExtensions
 {
@@ -135,5 +138,170 @@ public static class ImageSharpExtensions
         }
 
         return qrImage;
+    }
+
+    /// <summary>
+    /// 自动或手动识别网格。返回 cells + 行列数 + 模式 + 背景色。
+    /// forceRows/forceCols 都有值时走手动等分，否则自动扫描沟槽。
+    /// </summary>
+    public static (List<GridCell> Cells, int Rows, int Cols, string Mode, Rgba32 Background) DetectGrid(
+        Image image,
+        int? forceRows = null,
+        int? forceCols = null,
+        int threshold = 24,
+        float ratio = 0.97f)
+    {
+        using var rgba = image.CloneAs<Rgba32>();
+        int width = rgba.Width;
+        int height = rgba.Height;
+
+        // 采样左上角背景色
+        var bg = rgba[0, 0];
+
+        if (forceRows is > 0 && forceCols is > 0)
+        {
+            int rows = forceRows.Value;
+            int cols = forceCols.Value;
+            int cellW = width / cols;
+            int cellH = height / rows;
+            var cells = new List<GridCell>();
+            for (int r = 0; r < rows; r++)
+                for (int c = 0; c < cols; c++)
+                    cells.Add(new GridCell(c * cellW, r * cellH, cellW, cellH));
+            return (cells, rows, cols, "manual", bg);
+        }
+
+        // ---- 自动模式：扫描背景沟槽 ----
+        bool IsGutterRow(int y)
+        {
+            int match = 0;
+            for (int x = 0; x < width; x++)
+            {
+                var p = rgba[x, y];
+                if (ColorDistance(p, bg) <= threshold) match++;
+            }
+            return match / (float)width >= ratio;
+        }
+
+        bool IsGutterCol(int x)
+        {
+            int match = 0;
+            for (int y = 0; y < height; y++)
+            {
+                var p = rgba[x, y];
+                if (ColorDistance(p, bg) <= threshold) match++;
+            }
+            return match / (float)height >= ratio;
+        }
+
+        var rowGutter = new bool[height];
+        for (int y = 0; y < height; y++) rowGutter[y] = IsGutterRow(y);
+
+        var colGutter = new bool[width];
+        for (int x = 0; x < width; x++) colGutter[x] = IsGutterCol(x);
+
+        var rowBands = ExtractBands(rowGutter);
+        var colBands = ExtractBands(colGutter);
+
+        if (rowBands.Count == 0 || colBands.Count == 0)
+            throw new InvalidOperationException(
+                "未能自动识别出网格，可能背景不是纯色或间距不规则。请手动指定 rows/cols。");
+
+        var autoCells = new List<GridCell>();
+        foreach (var (ry0, ry1) in rowBands)
+            foreach (var (cx0, cx1) in colBands)
+                autoCells.Add(new GridCell(cx0, ry0, cx1 - cx0, ry1 - ry0));
+
+        return (autoCells, rowBands.Count, colBands.Count, "auto", bg);
+    }
+
+    static double ColorDistance(Rgba32 a, Rgba32 b)
+    {
+        int dr = a.R - b.R, dg = a.G - b.G, db = a.B - b.B;
+        return Math.Sqrt(dr * dr + dg * dg + db * db);
+    }
+
+    static List<(int start, int end)> ExtractBands(bool[] gutterFlags)
+    {
+        var bands = new List<(int, int)>();
+        int start = -1;
+        for (int i = 0; i < gutterFlags.Length; i++)
+        {
+            bool isContent = !gutterFlags[i];
+            if (isContent && start == -1) start = i;
+            else if (!isContent && start != -1)
+            {
+                bands.Add((start, i));
+                start = -1;
+            }
+        }
+        if (start != -1) bands.Add((start, gutterFlags.Length));
+        return bands;
+    }
+
+    /// <summary>
+    /// 去掉 cell 内多余的背景边距，让图标紧贴边界（类似 sharp.trim）。
+    /// </summary>
+    public static Image TrimBackground(Image image, Rgba32 bg, int threshold = 24)
+    {
+        using var rgba = image.CloneAs<Rgba32>();
+        int w = rgba.Width, h = rgba.Height;
+        int minX = w, minY = h, maxX = -1, maxY = -1;
+
+        for (int y = 0; y < h; y++)
+        {
+            for (int x = 0; x < w; x++)
+            {
+                if (ColorDistance(rgba[x, y], bg) > threshold)
+                {
+                    if (x < minX) minX = x;
+                    if (x > maxX) maxX = x;
+                    if (y < minY) minY = y;
+                    if (y > maxY) maxY = y;
+                }
+            }
+        }
+
+        // 整格都是背景，返回原图
+        if (maxX < minX || maxY < minY)
+            return image.Clone(_ => { });
+
+        int tw = maxX - minX + 1;
+        int th = maxY - minY + 1;
+        return image.Clone(ctx => ctx.Crop(new Rectangle(minX, minY, tw, th)));
+    }
+
+    /// <summary>
+    /// 软抠底色：inner 内全透明，outer 外保留，中间线性插值 alpha。
+    /// 返回带透明通道的新图。
+    /// </summary>
+    public static Image RemoveBackground(Image image, Rgba32 bg, int innerThreshold = 20, int outerThreshold = 45)
+    {
+        var rgba = image.CloneAs<Rgba32>();
+        rgba.ProcessPixelRows(accessor =>
+        {
+            for (int y = 0; y < accessor.Height; y++)
+            {
+                var row = accessor.GetRowSpan(y);
+                for (int x = 0; x < row.Length; x++)
+                {
+                    ref var p = ref row[x];
+                    double dist = ColorDistance(p, bg);
+                    byte originalAlpha = p.A;
+                    byte newAlpha;
+                    if (dist <= innerThreshold)
+                        newAlpha = 0;
+                    else if (dist >= outerThreshold)
+                        newAlpha = originalAlpha;
+                    else
+                    {
+                        double t = (dist - innerThreshold) / (outerThreshold - innerThreshold);
+                        newAlpha = (byte)Math.Round(t * originalAlpha);
+                    }
+                    p.A = newAlpha;
+                }
+            }
+        });
+        return rgba;
     }
 }

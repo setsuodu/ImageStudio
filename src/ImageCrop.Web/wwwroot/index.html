@@ -145,6 +145,7 @@
                 <div class="tab" onclick="switchMode('convert', this)">格式转换</div>
                 <!-- 注入二维码 Tab -->
                 <div class="tab" onclick="switchMode('qrcode', this)">二维码生成</div>
+                <div class="tab" onclick="switchMode('grid', this)">网格切图</div>
             </div>
 
             <div class="editor-area">
@@ -213,8 +214,26 @@
                         </select></label>`;
                 } else if (mode === 'convert') {
                     config.innerHTML = `<label>目标格式: <select id="format"><option value="webp">WebP</option><option value="png">PNG</option><option value="jpg">JPG</option><option value="bmp">BMP</option></select></label>`;
+                } else if (mode === 'grid') {
+                    config.innerHTML = `
+                        <label>行: <input type="number" id="rows" value="3" min="1" max="20" placeholder="空=自动" style="width:55px;" title="留空则自动识别"></label>
+                        <label>列: <input type="number" id="cols" value="3" min="1" max="20" placeholder="空=自动" style="width:55px;" title="留空则自动识别"></label>
+                        <span style="color:#999;font-size:12px;">（留空=自动识别）</span>
+                        <label>命名: <input type="text" id="namePrefix" value="icon" style="width:70px;" title="输出文件名前缀，如 icon → icon_01.png"></label>
+                        <label>目标尺寸: <select id="gridScale">
+                            <option value="0">原尺寸</option>
+                            <option value="16">16</option>
+                            <option value="32">32</option>
+                            <option value="64" selected>64</option>
+                            <option value="128">128</option>
+                            <option value="256">256</option>
+                            <option value="512">512</option>
+                        </select></label>
+                        <label><input type="checkbox" id="matte" checked style="width:auto;vertical-align:middle;"> 去底色</label>
+                        <label>容差: <input type="number" id="threshold" value="24" min="1" max="80" style="width:45px;"></label>
+                        <button onclick="processGrid()" style="padding:6px 16px; cursor:pointer; background:#0078d4; color:#fff; border:none; border-radius:3px;">一键切图下载</button>`;
                 }
-                autoProcess();
+                if (mode !== 'grid') autoProcess();
             }
         }
 
@@ -243,7 +262,7 @@
         }
 
         async function autoProcess() {
-            if (!loadedFile || currentMode === 'qrcode') return;
+            if (!loadedFile || currentMode === 'qrcode' || currentMode === 'grid') return;
             const fd = new FormData();
             fd.append('file', loadedFile);
             let url = `/api/image/${currentMode}?`;
@@ -265,6 +284,51 @@
                 }
             } catch (e) { document.getElementById('msg').innerText = "请求失败"; }
         }
+
+        async function processGrid() {
+            if (!loadedFile) {
+                document.getElementById('msg').innerText = "请先上传图片";
+                return;
+            }
+            const rowsVal = document.getElementById('rows').value;
+            const colsVal = document.getElementById('cols').value;
+            const scale = document.getElementById('gridScale').value || 0;
+            const matte = document.getElementById('matte').checked;
+            const threshold = document.getElementById('threshold').value || 24;
+            const namePrefix = (document.getElementById('namePrefix').value || 'icon').trim();
+            const fd = new FormData();
+            fd.append('file', loadedFile);
+            let url = `/api/image/grid?scale=${scale}&matte=${matte}&threshold=${threshold}&name=${encodeURIComponent(namePrefix)}`;
+            if (rowsVal && colsVal) {
+                url += `&rows=${rowsVal}&cols=${colsVal}`;
+            }
+            // 不传 rows/cols → 后端自动识别
+            document.getElementById('msg').innerText = "切图中（识别网格 / 去边距 / 去底色）...";
+            try {
+                const resp = await fetch(url, { method: 'POST', body: fd });
+                if (!resp.ok) {
+                    const err = await resp.text();
+                    document.getElementById('msg').innerText = "失败: " + err;
+                    return;
+                }
+                const blob = await resp.blob();
+                const a = document.createElement('a');
+                a.href = URL.createObjectURL(blob);
+                a.download = 'icons.zip';
+                a.click();
+                URL.revokeObjectURL(a.href);
+                const mode = resp.headers.get('X-Grid-Mode') || '';
+                const gr = resp.headers.get('X-Grid-Rows') || '?';
+                const gc = resp.headers.get('X-Grid-Cols') || '?';
+                document.getElementById('msg').innerText = `成功 [${mode}]：${gr}×${gc} 共 ${(+gr)*(+gc)} 张，已下载 icons.zip`;
+            } catch (e) {
+                document.getElementById('msg').innerText = "请求失败: " + e.message;
+            }
+        }
+
+        // 更新 autoProcess 跳过 grid
+        const _origAuto = autoProcess;
+        // already handled in switch
 
         window.onload = () => switchMode('crop', document.querySelector('.tab'));
     </script>

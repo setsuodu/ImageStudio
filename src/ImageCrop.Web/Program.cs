@@ -1,5 +1,8 @@
+using System.IO.Compression;
 using QRCoder;
 using SixLabors.ImageSharp;
+using SixLabors.ImageSharp.Processing;
+using SixLabors.ImageSharp.PixelFormats;
 using ImageCrop.Core;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -97,6 +100,95 @@ app.MapGet("/api/image/qrcode", async (HttpContext context) => {
     using var qrImage = ImageSharpExtensions.GenerateQRCode(text, size, eccLevel);
 
     return await ToFileResult(qrImage, "png");
+});
+
+// --- 路由 5：网格切图（对齐 image-studio-node /api/process）---
+// 自动识别网格 or 手动 rows/cols；trim 去边距让图标居中；可选去底色；可选等比缩放；输出 icons.zip
+app.MapPost("/api/image/grid", async (HttpContext context) =>
+{
+    var form = await context.Request.ReadFormAsync();
+    var file = form.Files.GetFile("file");
+    if (file == null) return Results.BadRequest("No file uploaded");
+
+    // rows/cols 都传才走手动，否则自动识别
+    int? forceRows = null, forceCols = null;
+    if (int.TryParse(context.Request.Query["rows"].ToString(), out int r) && r > 0)
+        forceRows = Math.Clamp(r, 1, 20);
+    if (int.TryParse(context.Request.Query["cols"].ToString(), out int c) && c > 0)
+        forceCols = Math.Clamp(c, 1, 20);
+
+    int.TryParse(context.Request.Query["scale"].ToString(), out int targetSize);
+    // scale<=0 → 不缩放
+
+    bool doMatte = !string.Equals(context.Request.Query["matte"].ToString(), "false", StringComparison.OrdinalIgnoreCase);
+    int.TryParse(context.Request.Query["threshold"].ToString(), out int threshold);
+    if (threshold < 1) threshold = 24;
+
+    // 自定义文件名前缀，默认 icon
+    var namePrefix = context.Request.Query["name"].ToString();
+    if (string.IsNullOrWhiteSpace(namePrefix)) namePrefix = "icon";
+    // 去掉非法文件名字符
+    foreach (var ch in Path.GetInvalidFileNameChars())
+        namePrefix = namePrefix.Replace(ch.ToString(), "");
+    if (string.IsNullOrWhiteSpace(namePrefix)) namePrefix = "icon";
+
+    using var image = await Image.LoadAsync(file.OpenReadStream());
+
+    List<GridCell> cells;
+    int detectedRows, detectedCols;
+    string mode;
+    Rgba32 bg;
+    try
+    {
+        (cells, detectedRows, detectedCols, mode, bg) =
+            ImageSharpExtensions.DetectGrid(image, forceRows, forceCols, threshold);
+    }
+    catch (Exception ex)
+    {
+        return Results.BadRequest(ex.Message);
+    }
+
+    var zipMs = new MemoryStream();
+    using (var archive = new ZipArchive(zipMs, ZipArchiveMode.Create, leaveOpen: true))
+    {
+        int index = 1;
+        foreach (var cell in cells)
+        {
+            // 1. 裁出 cell
+            using var extracted = image.Clone(ctx => ctx.Crop(new Rectangle(cell.X, cell.Y, cell.Width, cell.Height)));
+
+            // 2. trim：去掉 cell 内多余背景边距，让图标紧贴/居中
+            using var trimmed = ImageSharpExtensions.TrimBackground(extracted, bg, threshold);
+
+            // 3. 去底色（默认开）
+            Image output = doMatte
+                ? ImageSharpExtensions.RemoveBackground(trimmed, bg)
+                : trimmed.Clone(_ => { });
+
+            // 4. 可选等比缩放（最长边）
+            if (targetSize > 0)
+            {
+                var scaled = output.ScaleToMaxSide(targetSize);
+                if (output != trimmed) output.Dispose();
+                output = scaled;
+            }
+
+            var entry = archive.CreateEntry($"{namePrefix}_{index:D2}.png", CompressionLevel.Optimal);
+            await using (var entryStream = entry.Open())
+            {
+                await output.SaveAsPngAsync(entryStream);
+            }
+
+            if (output != trimmed) output.Dispose();
+            index++;
+        }
+    }
+
+    zipMs.Position = 0;
+    context.Response.Headers["X-Grid-Mode"] = mode;
+    context.Response.Headers["X-Grid-Rows"] = detectedRows.ToString();
+    context.Response.Headers["X-Grid-Cols"] = detectedCols.ToString();
+    return Results.File(zipMs, "application/zip", "icons.zip");
 });
 
 app.Run();
