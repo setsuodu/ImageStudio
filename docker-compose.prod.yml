@@ -1,0 +1,6 @@
+services:
+  imagecrop.web:
+    image: ghcr.io/setsuodu/imagestudio:v1.0.3
+    restart: unless-stopped
+    ports:
+      - "8070:8070"
