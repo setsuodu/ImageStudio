@@ -191,4 +191,62 @@ app.MapPost("/api/image/grid", async (HttpContext context) =>
     return Results.File(zipMs, "application/zip", "icons.zip");
 });
 
+
+// --- 路由 6：音视频转音频（MP4/视频/音频 → MP3/WAV/...）对齐 Convertio 风格 ---
+app.MapPost("/api/audio/convert", async (HttpContext context) =>
+{
+    if (!AudioConvert.IsFfmpegAvailable())
+        return Results.Json(new { error = "服务器未安装 ffmpeg，无法进行音视频转换" }, statusCode: 503);
+
+    var form = await context.Request.ReadFormAsync();
+    var file = form.Files.GetFile("file");
+    if (file == null) return Results.BadRequest("No file uploaded");
+
+    var format = context.Request.Query["format"].ToString();
+    if (string.IsNullOrWhiteSpace(format)) format = "mp3";
+
+    int? bitrate = null;
+    if (int.TryParse(context.Request.Query["bitrate"].ToString(), out int br) && br > 0)
+        bitrate = Math.Clamp(br, 32, 320);
+
+    int? sampleRate = null;
+    if (int.TryParse(context.Request.Query["samplerate"].ToString(), out int sr) && sr > 0)
+        sampleRate = sr;
+
+    // 限制上传大小（默认 200MB，可在配置中调）
+    const long maxBytes = 200L * 1024 * 1024;
+    if (file.Length > maxBytes)
+        return Results.BadRequest($"文件过大，限制 {maxBytes / 1024 / 1024} MB");
+
+    try
+    {
+        await using var stream = file.OpenReadStream();
+        var (outPath, contentType, outName) = await AudioConvert.ConvertAsync(
+            stream, file.FileName ?? "input.mp4", format, bitrate, sampleRate, context.RequestAborted);
+
+        // 异步返回后删除临时文件
+        var ms = new MemoryStream(await File.ReadAllBytesAsync(outPath));
+        try { File.Delete(outPath); } catch { }
+        ms.Position = 0;
+        return Results.File(ms, contentType, outName);
+    }
+    catch (ArgumentException ex)
+    {
+        return Results.BadRequest(ex.Message);
+    }
+    catch (Exception ex)
+    {
+        return Results.Json(new { error = ex.Message }, statusCode: 500);
+    }
+});
+
+// 健康检查：是否具备 ffmpeg
+app.MapGet("/api/audio/status", () => Results.Json(new
+{
+    ffmpeg = AudioConvert.IsFfmpegAvailable(),
+    input = AudioConvert.SupportedInputExt.OrderBy(x => x).ToArray(),
+    output = AudioConvert.SupportedOutput.OrderBy(x => x).ToArray()
+}));
+
+
 app.Run();

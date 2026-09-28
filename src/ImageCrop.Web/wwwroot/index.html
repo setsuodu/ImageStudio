@@ -146,6 +146,7 @@
                 <!-- 注入二维码 Tab -->
                 <div class="tab" onclick="switchMode('qrcode', this)">二维码生成</div>
                 <div class="tab" onclick="switchMode('grid', this)">网格切图</div>
+                <div class="tab" onclick="switchMode('audio', this)">音视频转换</div>
             </div>
 
             <div class="editor-area">
@@ -172,6 +173,51 @@
                         <p id="qrHint" style="color:#aaa;">输入内容点击生成</p>
                     </div>
                 </div>
+
+                <!-- 音视频转换 UI -->
+                <div id="audio-ui" style="display:none;">
+                    <div class="upload-drop-zone" id="audioDropZone" onclick="document.getElementById('audioFileInput').click()">
+                        <span id="audioDropText">点击或拖拽 视频/音频 文件到这里（MP4 / MKV / MOV / MP3 / WAV ...）</span>
+                        <input type="file" id="audioFileInput" hidden accept="video/*,audio/*,.mp4,.mkv,.avi,.mov,.webm,.mp3,.wav,.flac,.aac,.m4a,.ogg" onchange="handleAudioFile(this.files[0])">
+                    </div>
+                    <div class="config-bar" style="flex-wrap:wrap;">
+                        <label>目标格式:
+                            <select id="audioFormat">
+                                <option value="mp3" selected>MP3</option>
+                                <option value="wav">WAV</option>
+                                <option value="flac">FLAC</option>
+                                <option value="aac">AAC</option>
+                                <option value="m4a">M4A</option>
+                                <option value="ogg">OGG</option>
+                                <option value="opus">OPUS</option>
+                            </select>
+                        </label>
+                        <label>码率(kbps):
+                            <select id="audioBitrate">
+                                <option value="128">128</option>
+                                <option value="192" selected>192</option>
+                                <option value="256">256</option>
+                                <option value="320">320</option>
+                            </select>
+                        </label>
+                        <label>采样率:
+                            <select id="audioSampleRate">
+                                <option value="0">默认</option>
+                                <option value="44100">44100</option>
+                                <option value="48000">48000</option>
+                                <option value="22050">22050</option>
+                            </select>
+                        </label>
+                        <button onclick="processAudio()" style="padding:6px 16px; cursor:pointer; background:#0078d4; color:#fff; border:none; border-radius:3px;">开始转换并下载</button>
+                    </div>
+                    <div id="audioMsg" style="font-size:12px; color:#999; margin-bottom:10px;">就绪 · 支持从视频抽取音轨（MP4→MP3/WAV）</div>
+                    <div style="font-size:12px;color:#888;line-height:1.6;">
+                        输入：MP4 / MKV / AVI / MOV / WEBM / MP3 / WAV / FLAC / AAC / M4A / OGG 等<br>
+                        输出：MP3 · WAV · FLAC · AAC · M4A · OGG · OPUS<br>
+                        说明：自动去除视频轨，仅保留音频；大文件请耐心等待。
+                    </div>
+                </div>
+
             </div>
         </div>
     </div>
@@ -181,6 +227,11 @@
         let loadedFile = null;
 
         function switchMode(mode, el) {
+            document.getElementById('image-process-ui').style.display = (mode === 'qrcode' || mode === 'audio') ? 'none' : 'block';
+            document.getElementById('qrcode-ui').style.display = mode === 'qrcode' ? 'block' : 'none';
+            var au = document.getElementById('audio-ui');
+            if (au) au.style.display = mode === 'audio' ? 'block' : 'none';
+
             currentMode = mode;
             document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
             el.classList.add('active');
@@ -192,6 +243,9 @@
             if (mode === 'qrcode') {
                 imgUI.style.display = 'none';
                 qrUI.style.display = 'block';
+            } else if (mode === 'audio') {
+                imgUI.style.display = 'none';
+                qrUI.style.display = 'none';
             } else {
                 imgUI.style.display = 'block';
                 qrUI.style.display = 'none';
@@ -233,7 +287,7 @@
                         <label>容差: <input type="number" id="threshold" value="24" min="1" max="80" style="width:45px;"></label>
                         <button onclick="processGrid()" style="padding:6px 16px; cursor:pointer; background:#0078d4; color:#fff; border:none; border-radius:3px;">一键切图下载</button>`;
                 }
-                if (mode !== 'grid') autoProcess();
+                if (mode !== 'grid' && mode !== 'audio') autoProcess();
             }
         }
 
@@ -262,7 +316,7 @@
         }
 
         async function autoProcess() {
-            if (!loadedFile || currentMode === 'qrcode' || currentMode === 'grid') return;
+            if (!loadedFile || currentMode === 'qrcode' || currentMode === 'grid' || currentMode === 'audio') return;
             const fd = new FormData();
             fd.append('file', loadedFile);
             let url = `/api/image/${currentMode}?`;
@@ -329,6 +383,59 @@
         // 更新 autoProcess 跳过 grid
         const _origAuto = autoProcess;
         // already handled in switch
+
+        
+        let audioFile = null;
+        function handleAudioFile(file) {
+            if (!file) return;
+            audioFile = file;
+            document.getElementById('audioDropText').innerText = `已加载: ${file.name} (${(file.size/1024/1024).toFixed(2)} MB)`;
+            document.getElementById('audioMsg').innerText = '文件已就绪，选择格式后点击转换';
+        }
+        async function processAudio() {
+            if (!audioFile) {
+                document.getElementById('audioMsg').innerText = '请先上传音视频文件';
+                return;
+            }
+            const format = document.getElementById('audioFormat').value;
+            const bitrate = document.getElementById('audioBitrate').value;
+            const samplerate = document.getElementById('audioSampleRate').value;
+            const fd = new FormData();
+            fd.append('file', audioFile);
+            let url = `/api/audio/convert?format=${format}&bitrate=${bitrate}`;
+            if (samplerate && samplerate !== '0') url += `&samplerate=${samplerate}`;
+            document.getElementById('audioMsg').innerText = '转换中，请稍候（大文件可能需要几十秒）...';
+            try {
+                const resp = await fetch(url, { method: 'POST', body: fd });
+                if (!resp.ok) {
+                    let err = await resp.text();
+                    try { err = JSON.parse(err).error || err; } catch(_){}
+                    document.getElementById('audioMsg').innerText = '失败: ' + err;
+                    return;
+                }
+                const blob = await resp.blob();
+                const a = document.createElement('a');
+                const cd = resp.headers.get('Content-Disposition') || '';
+                let name = 'output.' + format;
+                const m = /filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/.exec(cd);
+                if (m && m[1]) name = m[1].replace(/['"]/g, '');
+                a.href = URL.createObjectURL(blob);
+                a.download = name;
+                a.click();
+                URL.revokeObjectURL(a.href);
+                document.getElementById('audioMsg').innerText = `成功：已下载 ${name} (${(blob.size/1024).toFixed(1)} KB)`;
+            } catch (e) {
+                document.getElementById('audioMsg').innerText = '请求失败: ' + e.message;
+            }
+        }
+        // 拖拽支持
+        (function(){
+            const adz = document.getElementById('audioDropZone');
+            if (!adz) return;
+            adz.ondragover = (e) => { e.preventDefault(); adz.classList.add('dragover'); };
+            adz.ondragleave = () => adz.classList.remove('dragover');
+            adz.ondrop = (e) => { e.preventDefault(); adz.classList.remove('dragover'); handleAudioFile(e.dataTransfer.files[0]); };
+        })();
 
         window.onload = () => switchMode('crop', document.querySelector('.tab'));
     </script>
