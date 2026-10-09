@@ -248,5 +248,133 @@ app.MapGet("/api/audio/status", () => Results.Json(new
     output = AudioConvert.SupportedOutput.OrderBy(x => x).ToArray()
 }));
 
+// ========== FFmpeg 视频工具 ==========
+
+const long VideoMaxBytes = 500L * 1024 * 1024; // 500MB
+
+// 视频裁剪：?start=46&duration=74  或  ?start=46&end=120  （秒，支持小数）
+app.MapPost("/api/video/trim", async (HttpContext context) =>
+{
+    if (!VideoFfmpeg.IsFfmpegAvailable())
+        return Results.Json(new { error = "服务器未安装 ffmpeg" }, statusCode: 503);
+
+    var form = await context.Request.ReadFormAsync();
+    var file = form.Files.GetFile("file");
+    if (file == null) return Results.BadRequest("No file uploaded");
+    if (file.Length > VideoMaxBytes) return Results.BadRequest($"文件过大，限制 {VideoMaxBytes / 1024 / 1024} MB");
+
+    double? start = null, duration = null, end = null;
+    if (double.TryParse(context.Request.Query["start"], out var s) && s >= 0) start = s;
+    if (double.TryParse(context.Request.Query["duration"], out var d) && d > 0) duration = d;
+    if (double.TryParse(context.Request.Query["end"], out var e) && e > 0) end = e;
+    bool copy = !string.Equals(context.Request.Query["reencode"], "1", StringComparison.OrdinalIgnoreCase);
+
+    try
+    {
+        await using var stream = file.OpenReadStream();
+        var (outPath, contentType, outName) = await VideoFfmpeg.TrimAsync(
+            stream, file.FileName ?? "input.mp4", start, duration, end, copy, context.RequestAborted);
+        var ms = new MemoryStream(await File.ReadAllBytesAsync(outPath));
+        try { File.Delete(outPath); } catch { }
+        ms.Position = 0;
+        return Results.File(ms, contentType, outName);
+    }
+    catch (ArgumentException ex) { return Results.BadRequest(ex.Message); }
+    catch (Exception ex) { return Results.Json(new { error = ex.Message }, statusCode: 500); }
+});
+
+// 修改视频码率：?bitrate=3000 （kbps）
+app.MapPost("/api/video/bitrate", async (HttpContext context) =>
+{
+    if (!VideoFfmpeg.IsFfmpegAvailable())
+        return Results.Json(new { error = "服务器未安装 ffmpeg" }, statusCode: 503);
+
+    var form = await context.Request.ReadFormAsync();
+    var file = form.Files.GetFile("file");
+    if (file == null) return Results.BadRequest("No file uploaded");
+    if (file.Length > VideoMaxBytes) return Results.BadRequest($"文件过大，限制 {VideoMaxBytes / 1024 / 1024} MB");
+
+    int bitrate = 3000;
+    if (int.TryParse(context.Request.Query["bitrate"], out var b) && b > 0) bitrate = b;
+
+    try
+    {
+        await using var stream = file.OpenReadStream();
+        var (outPath, contentType, outName) = await VideoFfmpeg.SetBitrateAsync(
+            stream, file.FileName ?? "input.mp4", bitrate, context.RequestAborted);
+        var ms = new MemoryStream(await File.ReadAllBytesAsync(outPath));
+        try { File.Delete(outPath); } catch { }
+        ms.Position = 0;
+        return Results.File(ms, contentType, outName);
+    }
+    catch (ArgumentException ex) { return Results.BadRequest(ex.Message); }
+    catch (Exception ex) { return Results.Json(new { error = ex.Message }, statusCode: 500); }
+});
+
+// 视频抽帧 → zip：?fps=24&max=100
+app.MapPost("/api/video/frames", async (HttpContext context) =>
+{
+    if (!VideoFfmpeg.IsFfmpegAvailable())
+        return Results.Json(new { error = "服务器未安装 ffmpeg" }, statusCode: 503);
+
+    var form = await context.Request.ReadFormAsync();
+    var file = form.Files.GetFile("file");
+    if (file == null) return Results.BadRequest("No file uploaded");
+    if (file.Length > VideoMaxBytes) return Results.BadRequest($"文件过大，限制 {VideoMaxBytes / 1024 / 1024} MB");
+
+    int fps = 24;
+    if (int.TryParse(context.Request.Query["fps"], out var f) && f > 0) fps = f;
+    int? maxFrames = null;
+    if (int.TryParse(context.Request.Query["max"], out var m) && m > 0) maxFrames = m;
+
+    try
+    {
+        await using var stream = file.OpenReadStream();
+        var (outPath, contentType, outName) = await VideoFfmpeg.ExtractFramesAsync(
+            stream, file.FileName ?? "input.mp4", fps, maxFrames, context.RequestAborted);
+        var ms = new MemoryStream(await File.ReadAllBytesAsync(outPath));
+        try { File.Delete(outPath); } catch { }
+        ms.Position = 0;
+        return Results.File(ms, contentType, outName);
+    }
+    catch (ArgumentException ex) { return Results.BadRequest(ex.Message); }
+    catch (Exception ex) { return Results.Json(new { error = ex.Message }, statusCode: 500); }
+});
+
+// 水平等分：?side=left|right|both
+app.MapPost("/api/video/split", async (HttpContext context) =>
+{
+    if (!VideoFfmpeg.IsFfmpegAvailable())
+        return Results.Json(new { error = "服务器未安装 ffmpeg" }, statusCode: 503);
+
+    var form = await context.Request.ReadFormAsync();
+    var file = form.Files.GetFile("file");
+    if (file == null) return Results.BadRequest("No file uploaded");
+    if (file.Length > VideoMaxBytes) return Results.BadRequest($"文件过大，限制 {VideoMaxBytes / 1024 / 1024} MB");
+
+    var side = context.Request.Query["side"].ToString();
+    if (string.IsNullOrWhiteSpace(side)) side = "left";
+
+    try
+    {
+        await using var stream = file.OpenReadStream();
+        var (outPath, contentType, outName) = await VideoFfmpeg.SplitHorizontalAsync(
+            stream, file.FileName ?? "input.mp4", side, context.RequestAborted);
+        var ms = new MemoryStream(await File.ReadAllBytesAsync(outPath));
+        try { File.Delete(outPath); } catch { }
+        ms.Position = 0;
+        return Results.File(ms, contentType, outName);
+    }
+    catch (ArgumentException ex) { return Results.BadRequest(ex.Message); }
+    catch (Exception ex) { return Results.Json(new { error = ex.Message }, statusCode: 500); }
+});
+
+// FFmpeg 视频工具状态
+app.MapGet("/api/video/status", () => Results.Json(new
+{
+    ffmpeg = VideoFfmpeg.IsFfmpegAvailable(),
+    input = VideoFfmpeg.SupportedVideoExt.OrderBy(x => x).ToArray(),
+    tools = new[] { "trim", "bitrate", "frames", "split" }
+}));
 
 app.Run();

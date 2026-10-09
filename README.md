@@ -18,6 +18,18 @@
 - 接口：`POST /api/audio/convert?format=mp3|wav&bitrate=192`
 - 状态：`GET /api/audio/status`（检查 ffmpeg 是否可用）
 
+### FFmpeg 视频工具（专页）
+- **视频裁剪**：去头/去尾/截取区间（对应 `-ss` / `-to` / `-t`，支持 `-c copy` 快速剪切）
+- **修改视频码率**：默认 3000k，libx264 + 音频 copy
+- **视频转序列帧**：按 fps 导出 PNG，打包 zip
+- **水平等分**：取左半 / 右半 / 两侧（zip）
+- 接口：
+  - `POST /api/video/trim?start=46&end=120` 或 `?start=46&duration=74`
+  - `POST /api/video/bitrate?bitrate=3000`
+  - `POST /api/video/frames?fps=24&max=100`
+  - `POST /api/video/split?side=left|right|both`
+  - `GET /api/video/status`
+
 ## 平台
 
 - Console
@@ -58,6 +70,11 @@ docker run -d \
 | POST | /api/image/grid | 网格切图 → zip |
 | POST | /api/audio/convert | **音视频 → MP3/WAV/...** |
 | GET  | /api/audio/status | ffmpeg 与支持格式 |
+| POST | /api/video/trim | 视频裁剪（start/end/duration） |
+| POST | /api/video/bitrate | 修改视频码率 |
+| POST | /api/video/frames | 视频转序列帧 → zip |
+| POST | /api/video/split | 水平等分 left/right/both |
+| GET  | /api/video/status | 视频工具与 ffmpeg 状态 |
 
 ### 音视频转换示例
 

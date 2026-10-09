@@ -1,4 +1,4 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html>
 <head>
     <meta charset="UTF-8">
@@ -147,6 +147,7 @@
                 <div class="tab" onclick="switchMode('qrcode', this)">二维码生成</div>
                 <div class="tab" onclick="switchMode('grid', this)">网格切图</div>
                 <div class="tab" onclick="switchMode('audio', this)">音视频转换</div>
+                <div class="tab" onclick="switchMode('ffmpeg', this)">FFmpeg 工具</div>
             </div>
 
             <div class="editor-area">
@@ -218,6 +219,36 @@
                     </div>
                 </div>
 
+                <!-- FFmpeg 视频工具专页 -->
+                <div id="ffmpeg-ui" style="display:none;">
+                    <div class="upload-drop-zone" id="ffmpegDropZone" onclick="document.getElementById('ffmpegFileInput').click()">
+                        <span id="ffmpegDropText">点击或拖拽 视频文件到这里（MP4 / MKV / MOV / AVI / WEBM ...）</span>
+                        <input type="file" id="ffmpegFileInput" hidden accept="video/*,.mp4,.mkv,.avi,.mov,.webm,.flv,.wmv,.m4v" onchange="handleFfmpegFile(this.files[0])">
+                    </div>
+                    <div class="config-bar" style="flex-wrap:wrap; gap:12px; align-items:center;">
+                        <label>工具:
+                            <select id="ffmpegTool" onchange="onFfmpegToolChange()">
+                                <option value="trim">视频裁剪（去头/去尾/截取）</option>
+                                <option value="bitrate">修改视频码率</option>
+                                <option value="frames">视频转序列帧 (zip)</option>
+                                <option value="split">水平等分（左/右/两侧）</option>
+                            </select>
+                        </label>
+                    </div>
+                    <div id="ffmpegParams" class="config-bar" style="flex-wrap:wrap; gap:12px;"></div>
+                    <div style="margin:12px 0;">
+                        <button onclick="processFfmpeg()" style="padding:8px 20px; cursor:pointer; background:#0078d4; color:#fff; border:none; border-radius:3px;">开始处理并下载</button>
+                    </div>
+                    <div id="ffmpegMsg" style="font-size:12px; color:#999; margin-bottom:10px;">就绪 · 对应你常用的 ffmpeg 命令</div>
+                    <div style="font-size:12px;color:#888;line-height:1.7; background:#f8f8f8; padding:12px; border-radius:4px;">
+                        <b>对应常用命令：</b><br>
+                        · 裁剪：<code>ffmpeg -ss 00:00:46 -i in.mp4 -to 00:02:00 -c copy out.mp4</code><br>
+                        · 改码率：<code>ffmpeg -i in.mp4 -b:v 3000k -c:v libx264 -c:a copy out.mp4</code><br>
+                        · 抽帧：<code>ffmpeg -i in.mp4 -r 24 frame_%03d.png</code><br>
+                        · 水平左半：<code>ffmpeg -i in.mp4 -vf "crop=iw/2:ih:0:0" left.mp4</code>
+                    </div>
+                </div>
+
             </div>
         </div>
     </div>
@@ -227,10 +258,12 @@
         let loadedFile = null;
 
         function switchMode(mode, el) {
-            document.getElementById('image-process-ui').style.display = (mode === 'qrcode' || mode === 'audio') ? 'none' : 'block';
+            document.getElementById('image-process-ui').style.display = (mode === 'qrcode' || mode === 'audio' || mode === 'ffmpeg') ? 'none' : 'block';
             document.getElementById('qrcode-ui').style.display = mode === 'qrcode' ? 'block' : 'none';
             var au = document.getElementById('audio-ui');
             if (au) au.style.display = mode === 'audio' ? 'block' : 'none';
+            var ff = document.getElementById('ffmpeg-ui');
+            if (ff) ff.style.display = mode === 'ffmpeg' ? 'block' : 'none';
 
             currentMode = mode;
             document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
@@ -243,9 +276,10 @@
             if (mode === 'qrcode') {
                 imgUI.style.display = 'none';
                 qrUI.style.display = 'block';
-            } else if (mode === 'audio') {
+            } else if (mode === 'audio' || mode === 'ffmpeg') {
                 imgUI.style.display = 'none';
                 qrUI.style.display = 'none';
+                if (mode === 'ffmpeg') onFfmpegToolChange();
             } else {
                 imgUI.style.display = 'block';
                 qrUI.style.display = 'none';
@@ -435,6 +469,120 @@
             adz.ondragover = (e) => { e.preventDefault(); adz.classList.add('dragover'); };
             adz.ondragleave = () => adz.classList.remove('dragover');
             adz.ondrop = (e) => { e.preventDefault(); adz.classList.remove('dragover'); handleAudioFile(e.dataTransfer.files[0]); };
+        })();
+
+
+        // ===== FFmpeg 工具 =====
+        let ffmpegFile = null;
+        function handleFfmpegFile(file) {
+            if (!file) return;
+            ffmpegFile = file;
+            document.getElementById('ffmpegDropText').innerText = '已加载: ' + file.name + ' (' + (file.size/1024/1024).toFixed(2) + ' MB)';
+            document.getElementById('ffmpegMsg').innerText = '文件已就绪，选择工具与参数后点击处理';
+        }
+        function onFfmpegToolChange() {
+            const tool = document.getElementById('ffmpegTool').value;
+            const box = document.getElementById('ffmpegParams');
+            if (tool === 'trim') {
+                box.innerHTML = `
+                    <label>开始秒数: <input type="number" id="ffStart" value="0" min="0" step="0.1" style="width:80px"></label>
+                    <label>结束秒数 (可选): <input type="number" id="ffEnd" value="" min="0" step="0.1" placeholder="留空=到结尾" style="width:90px"></label>
+                    <label>或 持续秒数: <input type="number" id="ffDuration" value="" min="0" step="0.1" placeholder="优先于结束" style="width:90px"></label>
+                    <label><input type="checkbox" id="ffCopy" checked> 快速剪切 (-c copy)</label>
+                `;
+            } else if (tool === 'bitrate') {
+                box.innerHTML = `
+                    <label>视频码率 (kbps):
+                        <select id="ffBitrate">
+                            <option value="512">512</option>
+                            <option value="1000">1000</option>
+                            <option value="2000">2000</option>
+                            <option value="3000" selected>3000</option>
+                            <option value="5000">5000</option>
+                            <option value="8000">8000</option>
+                        </select>
+                    </label>
+                    <span style="font-size:12px;color:#888;">对应: -b:v 3000k -c:v libx264 -c:a copy</span>
+                `;
+            } else if (tool === 'frames') {
+                box.innerHTML = `
+                    <label>帧率 fps: <input type="number" id="ffFps" value="24" min="1" max="60" style="width:60px"></label>
+                    <label>最多帧数 (可选): <input type="number" id="ffMaxFrames" value="" min="1" placeholder="不限制" style="width:80px"></label>
+                    <span style="font-size:12px;color:#888;">输出 PNG 序列打包为 zip</span>
+                `;
+            } else if (tool === 'split') {
+                box.innerHTML = `
+                    <label>取哪一侧:
+                        <select id="ffSide">
+                            <option value="left">左边一半</option>
+                            <option value="right">右边一半</option>
+                            <option value="both">两侧都导出 (zip)</option>
+                        </select>
+                    </label>
+                    <span style="font-size:12px;color:#888;">对应: crop=iw/2:ih:0:0 或 iw/2:0</span>
+                `;
+            }
+        }
+        async function processFfmpeg() {
+            if (!ffmpegFile) {
+                document.getElementById('ffmpegMsg').innerText = '请先上传视频文件';
+                return;
+            }
+            const tool = document.getElementById('ffmpegTool').value;
+            const fd = new FormData();
+            fd.append('file', ffmpegFile);
+            let url = '';
+            if (tool === 'trim') {
+                const start = document.getElementById('ffStart').value || '0';
+                const end = document.getElementById('ffEnd').value;
+                const duration = document.getElementById('ffDuration').value;
+                const copy = document.getElementById('ffCopy').checked;
+                url = `/api/video/trim?start=${start}`;
+                if (duration) url += `&duration=${duration}`;
+                else if (end) url += `&end=${end}`;
+                if (!copy) url += '&reencode=1';
+            } else if (tool === 'bitrate') {
+                const br = document.getElementById('ffBitrate').value;
+                url = `/api/video/bitrate?bitrate=${br}`;
+            } else if (tool === 'frames') {
+                const fps = document.getElementById('ffFps').value || '24';
+                const max = document.getElementById('ffMaxFrames').value;
+                url = `/api/video/frames?fps=${fps}`;
+                if (max) url += `&max=${max}`;
+            } else if (tool === 'split') {
+                const side = document.getElementById('ffSide').value;
+                url = `/api/video/split?side=${side}`;
+            }
+            document.getElementById('ffmpegMsg').innerText = '处理中，请稍候（大文件可能需要较长时间）...';
+            try {
+                const resp = await fetch(url, { method: 'POST', body: fd });
+                if (!resp.ok) {
+                    let err = await resp.text();
+                    try { err = JSON.parse(err).error || err; } catch(_){}
+                    document.getElementById('ffmpegMsg').innerText = '失败: ' + err;
+                    return;
+                }
+                const blob = await resp.blob();
+                const a = document.createElement('a');
+                const cd = resp.headers.get('Content-Disposition') || '';
+                let name = 'output.bin';
+                const m = /filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/.exec(cd);
+                if (m && m[1]) name = m[1].replace(/['"]/g, '');
+                a.href = URL.createObjectURL(blob);
+                a.download = name;
+                a.click();
+                URL.revokeObjectURL(a.href);
+                document.getElementById('ffmpegMsg').innerText = `成功：已下载 ${name} (${(blob.size/1024/1024).toFixed(2)} MB)`;
+            } catch (e) {
+                document.getElementById('ffmpegMsg').innerText = '请求失败: ' + e.message;
+            }
+        }
+        (function(){
+            const dz = document.getElementById('ffmpegDropZone');
+            if (!dz) return;
+            dz.ondragover = (e) => { e.preventDefault(); dz.classList.add('dragover'); };
+            dz.ondragleave = () => dz.classList.remove('dragover');
+            dz.ondrop = (e) => { e.preventDefault(); dz.classList.remove('dragover'); handleFfmpegFile(e.dataTransfer.files[0]); };
         })();
 
         window.onload = () => switchMode('crop', document.querySelector('.tab'));
