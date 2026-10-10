@@ -232,6 +232,7 @@
                                 <option value="bitrate">修改视频码率</option>
                                 <option value="frames">视频转序列帧 (zip)</option>
                                 <option value="split">水平等分（左/右/两侧）</option>
+                                <option value="aspect">修改视频比例（16:9 / 4:3 / 1:1 ...）</option>
                             </select>
                         </label>
                     </div>
@@ -245,7 +246,8 @@
                         · 裁剪：<code>ffmpeg -ss 00:00:46 -i in.mp4 -to 00:02:00 -c copy out.mp4</code><br>
                         · 改码率：<code>ffmpeg -i in.mp4 -b:v 3000k -c:v libx264 -c:a copy out.mp4</code><br>
                         · 抽帧：<code>ffmpeg -i in.mp4 -r 24 frame_%03d.png</code><br>
-                        · 水平左半：<code>ffmpeg -i in.mp4 -vf "crop=iw/2:ih:0:0" left.mp4</code>
+                        · 水平左半：<code>ffmpeg -i in.mp4 -vf "crop=iw/2:ih:0:0" left.mp4</code><br>
+                        · 改比例：<code>ffmpeg -i in.mp4 -vf "scale=...pad=..." -c:v libx264 out.mp4</code>（pad 黑边 / crop 裁切）
                     </div>
                 </div>
 
@@ -532,6 +534,27 @@
                     </label>
                     <span style="font-size:12px;color:#888;">对应: crop=iw/2:ih:0:0 或 iw/2:0</span>
                 `;
+            } else if (tool === 'aspect') {
+                box.innerHTML = `
+                    <label>目标比例:
+                        <select id="ffRatio">
+                            <option value="16:9" selected>16:9（横屏宽）</option>
+                            <option value="4:3">4:3</option>
+                            <option value="1:1">1:1（正方形）</option>
+                            <option value="9:16">9:16（竖屏）</option>
+                            <option value="21:9">21:9（超宽）</option>
+                            <option value="3:2">3:2</option>
+                            <option value="2:3">2:3</option>
+                        </select>
+                    </label>
+                    <label>方式:
+                        <select id="ffAspectMode">
+                            <option value="pad" selected>黑边补齐（完整画面）</option>
+                            <option value="crop">裁切铺满（可能裁掉边缘）</option>
+                        </select>
+                    </label>
+                    <span style="font-size:12px;color:#888;">例：640×640(1:1) → 16:9</span>
+                `;
             }
         }
         async function processFfmpeg() {
@@ -563,6 +586,10 @@
             } else if (tool === 'split') {
                 const side = document.getElementById('ffSide').value;
                 url = `/api/video/split?side=${side}`;
+            } else if (tool === 'aspect') {
+                const ratio = document.getElementById('ffRatio').value;
+                const mode = document.getElementById('ffAspectMode').value;
+                url = `/api/video/aspect?ratio=${encodeURIComponent(ratio)}&mode=${mode}`;
             }
             document.getElementById('ffmpegMsg').innerText = '处理中，请稍候（大文件可能需要较长时间）...';
             try {

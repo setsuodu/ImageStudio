@@ -217,6 +217,78 @@ public static class VideoFfmpeg
         }
     }
 
+
+    /// <summary>
+    /// 修改画面比例（如 1:1 → 16:9 / 4:3 / 9:16 等）
+    /// mode=pad：留黑边保持完整画面；mode=crop：裁切铺满目标比例
+    /// 下载名 = 原文件名（完全不变）
+    /// </summary>
+    public static async Task<(string OutputPath, string ContentType, string FileName)> ChangeAspectAsync(
+        Stream inputStream,
+        string originalFileName,
+        string ratio = "16:9",
+        string mode = "pad", // pad | crop
+        CancellationToken ct = default)
+    {
+        ratio = (ratio ?? "16:9").Trim();
+        mode = (mode ?? "pad").ToLowerInvariant();
+        if (mode != "pad" && mode != "crop")
+            throw new ArgumentException("mode 仅支持 pad 或 crop");
+
+        var parts = ratio.Split(new[] { ':', '：', '/', 'x', 'X', '*' }, StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length != 2
+            || !double.TryParse(parts[0].Trim(), System.Globalization.NumberStyles.Float,
+                System.Globalization.CultureInfo.InvariantCulture, out var rw) || rw <= 0
+            || !double.TryParse(parts[1].Trim(), System.Globalization.NumberStyles.Float,
+                System.Globalization.CultureInfo.InvariantCulture, out var rh) || rh <= 0)
+            throw new ArgumentException($"无效比例: {ratio}，示例: 16:9 / 4:3 / 1:1 / 9:16");
+
+        // 目标宽高比 TAR = rw/rh（用 Invariant 写入表达式）
+        var tar = (rw / rh).ToString("0.########", System.Globalization.CultureInfo.InvariantCulture);
+        var inv = (rh / rw).ToString("0.########", System.Globalization.CultureInfo.InvariantCulture); // 1/TAR
+
+        var (workDir, inputPath, baseName, ext) = await PrepareInputAsync(inputStream, originalFileName, ct);
+        var outExt = string.IsNullOrEmpty(ext) ? ".mp4" : ext;
+        // 输出统一 mp4，兼容性更好
+        outExt = ".mp4";
+        var outputPath = Path.Combine(workDir, "output" + outExt);
+
+        try
+        {
+            // a = iw/ih
+            // crop: 裁出目标比例最大居中区域
+            // pad:  缩放到能装进目标比例，再黑边补齐
+            string vf;
+            if (mode == "crop")
+            {
+                vf = $"crop='if(gt(a\\,{tar})\\,ih*{tar}\\,iw)':'if(gt(a\\,{tar})\\,ih\\,iw*{inv})',"
+                   + "scale=trunc(iw/2)*2:trunc(ih/2)*2,setsar=1";
+            }
+            else
+            {
+                vf = $"scale='if(gt(a\\,{tar})\\,ih*{tar}\\,iw)':'if(gt(a\\,{tar})\\,ih\\,iw*{inv})',"
+                   + $"pad='iw':'iw*{inv}':(ow-iw)/2:(oh-ih)/2:black,"
+                   + "scale=trunc(iw/2)*2:trunc(ih/2)*2,setsar=1";
+            }
+
+            var args = $"-y -i \"{inputPath}\" -vf \"{vf}\" -c:v libx264 -preset fast -crf 18 -c:a aac -b:a 192k -movflags +faststart \"{outputPath}\"";
+            var (exitCode, stderr) = await RunFfmpegAsync(args, ct);
+            if (exitCode != 0 || !File.Exists(outputPath))
+                throw new InvalidOperationException($"FFmpeg 改比例失败 (code={exitCode}): {Truncate(stderr, 500)}");
+
+            var finalPath = CopyToFinal(outputPath, outExt);
+            // 下载名保持原主文件名，扩展名 .mp4
+            var outName = string.IsNullOrWhiteSpace(originalFileName)
+                ? baseName + outExt
+                : Path.GetFileNameWithoutExtension(Path.GetFileName(originalFileName)) + outExt;
+            return (finalPath, "video/mp4", outName);
+        }
+        finally
+        {
+            TryDeleteDir(workDir);
+        }
+    }
+
     // ---------- helpers ----------
 
     static async Task<(string WorkDir, string InputPath, string BaseName, string Ext)> PrepareInputAsync(

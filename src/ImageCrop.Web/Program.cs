@@ -446,11 +446,45 @@ app.MapPost("/api/video/split", async (HttpContext context) =>
     catch (Exception ex) { return Results.Json(new { error = ex.Message }, statusCode: 500); }
 });
 
+
+app.MapPost("/api/video/aspect", async (HttpContext context) =>
+{
+    if (!VideoFfmpeg.IsFfmpegAvailable())
+        return Results.Json(new { error = "服务器未安装 ffmpeg" }, statusCode: 503);
+
+    var form = await context.Request.ReadFormAsync();
+    var file = form.Files.GetFile("file");
+    if (file == null) return Results.BadRequest("No file uploaded");
+    if (file.Length > VideoMaxBytes) return Results.BadRequest($"文件过大，限制 {VideoMaxBytes / 1024 / 1024} MB");
+
+    log.LogInformation(">>> [video/aspect] 收到文件名=[{FileName}] 大小={Len}", file.FileName, file.Length);
+
+    var ratio = context.Request.Query["ratio"].ToString();
+    if (string.IsNullOrWhiteSpace(ratio)) ratio = "16:9";
+    var mode = context.Request.Query["mode"].ToString();
+    if (string.IsNullOrWhiteSpace(mode)) mode = "pad";
+
+    try
+    {
+        await using var stream = file.OpenReadStream();
+        var (outPath, contentType, outName) = await VideoFfmpeg.ChangeAspectAsync(
+            stream, file.FileName ?? "input.mp4", ratio, mode, context.RequestAborted);
+
+        log.LogInformation(">>> [video/aspect] 返回下载名=[{OutName}] ratio={Ratio} mode={Mode}", outName, ratio, mode);
+
+        var bytes = await File.ReadAllBytesAsync(outPath);
+        try { File.Delete(outPath); } catch { }
+        return FileBytes(context, bytes, contentType, outName);
+    }
+    catch (ArgumentException ex) { return Results.BadRequest(ex.Message); }
+    catch (Exception ex) { return Results.Json(new { error = ex.Message }, statusCode: 500); }
+});
+
 app.MapGet("/api/video/status", () => Results.Json(new
 {
     ffmpeg = VideoFfmpeg.IsFfmpegAvailable(),
     input = VideoFfmpeg.SupportedVideoExt.OrderBy(x => x).ToArray(),
-    tools = new[] { "trim", "bitrate", "frames", "split" }
+    tools = new[] { "trim", "bitrate", "frames", "split", "aspect" }
 }));
 
 app.Run();
