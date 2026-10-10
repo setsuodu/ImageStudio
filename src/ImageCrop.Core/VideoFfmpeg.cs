@@ -20,6 +20,7 @@ public static class VideoFfmpeg
     /// <summary>
     /// 视频裁剪：从 startSec 开始，持续 durationSec 秒（或到 endSec）。
     /// 优先 -c copy 快速剪切；若失败可后续扩展 reencode。
+    /// 下载名 = 原文件名（完全不变）
     /// </summary>
     public static async Task<(string OutputPath, string ContentType, string FileName)> TrimAsync(
         Stream inputStream,
@@ -58,7 +59,8 @@ public static class VideoFfmpeg
                 throw new InvalidOperationException($"FFmpeg 裁剪失败 (code={exitCode}): {Truncate(stderr, 500)}");
 
             var finalPath = CopyToFinal(outputPath, outExt);
-            var outName = $"{baseName}_trim{outExt}";
+            // 下载名完全使用原文件名
+            var outName = string.IsNullOrWhiteSpace(originalFileName) ? baseName + outExt : Path.GetFileName(originalFileName);
             return (finalPath, "video/mp4", outName);
         }
         finally
@@ -69,6 +71,7 @@ public static class VideoFfmpeg
 
     /// <summary>
     /// 修改视频码率（默认 3000k），视频用 libx264，音频 copy
+    /// 下载名 = 原文件名（完全不变）
     /// </summary>
     public static async Task<(string OutputPath, string ContentType, string FileName)> SetBitrateAsync(
         Stream inputStream,
@@ -91,7 +94,10 @@ public static class VideoFfmpeg
                 throw new InvalidOperationException($"FFmpeg 改码率失败 (code={exitCode}): {Truncate(stderr, 500)}");
 
             var finalPath = CopyToFinal(outputPath, outExt);
-            var outName = $"{baseName}_{bitrateKbps}k{outExt}";
+            var outName = string.IsNullOrWhiteSpace(originalFileName) ? baseName + outExt : Path.GetFileName(originalFileName);
+            // 如果原扩展名不是 mp4，仍用原主名 + .mp4
+            if (!outName.EndsWith(".mp4", StringComparison.OrdinalIgnoreCase))
+                outName = Path.GetFileNameWithoutExtension(outName) + ".mp4";
             return (finalPath, "video/mp4", outName);
         }
         finally
@@ -102,6 +108,7 @@ public static class VideoFfmpeg
 
     /// <summary>
     /// 视频转序列帧，打包成 zip。fps 默认 24。
+    /// zip 名 = 原主文件名_frames.zip
     /// </summary>
     public static async Task<(string OutputPath, string ContentType, string FileName)> ExtractFramesAsync(
         Stream inputStream,
@@ -151,6 +158,7 @@ public static class VideoFfmpeg
 
     /// <summary>
     /// 水平等分：left / right / both（both 返回 zip）
+    /// 下载名 = 原文件名（完全不变）。both 时返回 zip，名 = 原主名_split.zip
     /// </summary>
     public static async Task<(string OutputPath, string ContentType, string FileName)> SplitHorizontalAsync(
         Stream inputStream,
@@ -182,6 +190,7 @@ public static class VideoFfmpeg
                 var zipPath = Path.Combine(Path.GetTempPath(), "imagestudio-split-" + Guid.NewGuid().ToString("N") + ".zip");
                 using (var zip = ZipFile.Open(zipPath, ZipArchiveMode.Create))
                 {
+                    // zip 内部条目也尽量用原名区分
                     zip.CreateEntryFromFile(leftPath, $"{baseName}_left{outExt}");
                     zip.CreateEntryFromFile(rightPath, $"{baseName}_right{outExt}");
                 }
@@ -197,7 +206,8 @@ public static class VideoFfmpeg
                     throw new InvalidOperationException($"水平切割失败 (code={exitCode}): {Truncate(stderr, 500)}");
 
                 var finalPath = CopyToFinal(outputPath, outExt);
-                var outName = $"{baseName}_{side}{outExt}";
+                // ★ 关键：下载名完全等于原文件名，不再加 _left / _right
+                var outName = string.IsNullOrWhiteSpace(originalFileName) ? baseName + outExt : Path.GetFileName(originalFileName);
                 return (finalPath, "video/mp4", outName);
             }
         }

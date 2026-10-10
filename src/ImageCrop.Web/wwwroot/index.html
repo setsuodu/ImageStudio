@@ -450,9 +450,7 @@
                 const blob = await resp.blob();
                 const a = document.createElement('a');
                 const cd = resp.headers.get('Content-Disposition') || '';
-                let name = 'output.' + format;
-                const m = /filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/.exec(cd);
-                if (m && m[1]) name = m[1].replace(/['"]/g, '');
+                let name = parseDownloadFilename(cd, 'output.' + format);
                 a.href = URL.createObjectURL(blob);
                 a.download = name;
                 a.click();
@@ -472,7 +470,20 @@
         })();
 
 
-        // ===== FFmpeg 工具 =====
+        
+        // 正确解析 Content-Disposition：优先 filename*=UTF-8''...（中文文件名）
+        function parseDownloadFilename(cd, fallback) {
+            if (!cd) return fallback;
+            let m = /filename\*\s*=\s*(?:UTF-8|utf-8)''([^;\s]+)/i.exec(cd);
+            if (m && m[1]) {
+                try { return decodeURIComponent(m[1]); } catch (_) { return m[1]; }
+            }
+            m = /filename\s*=\s*((['"]).*?\2|[^;\n]*)/i.exec(cd);
+            if (m && m[1]) return m[1].replace(/['"]/g, '').trim();
+            return fallback;
+        }
+
+// ===== FFmpeg 工具 =====
         let ffmpegFile = null;
         function handleFfmpegFile(file) {
             if (!file) return;
@@ -565,9 +576,7 @@
                 const blob = await resp.blob();
                 const a = document.createElement('a');
                 const cd = resp.headers.get('Content-Disposition') || '';
-                let name = 'output.bin';
-                const m = /filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/.exec(cd);
-                if (m && m[1]) name = m[1].replace(/['"]/g, '');
+                let name = parseDownloadFilename(cd, 'output.bin');
                 a.href = URL.createObjectURL(blob);
                 a.download = name;
                 a.click();
