@@ -521,4 +521,234 @@ app.MapGet("/api/video/status", () => Results.Json(new
     tools = new[] { "trim", "bitrate", "frames", "split", "aspect", "tomp4" }
 }));
 
+// ---------- 从 ComfyUI workflow / prompt JSON 里抽出纯字符串 Prompt ----------
+static List<string> ExtractPurePromptsFromComfyJson(string? jsonText)
+{
+    var list = new List<string>();
+    if (string.IsNullOrWhiteSpace(jsonText)) return list;
+    var t = jsonText.Trim();
+    if (!(t.StartsWith('{') || t.StartsWith('['))) return list;
+
+    try
+    {
+        using var doc = System.Text.Json.JsonDocument.Parse(t);
+        var root = doc.RootElement;
+        // ComfyUI 常见两种：直接节点字典，或 { "prompt": {节点...}, "workflow": ... }
+        System.Text.Json.JsonElement nodes = root;
+        if (root.ValueKind == System.Text.Json.JsonValueKind.Object)
+        {
+            if (root.TryGetProperty("prompt", out var p) && p.ValueKind == System.Text.Json.JsonValueKind.Object)
+                nodes = p;
+            else if (root.TryGetProperty("workflow", out var w) && w.ValueKind == System.Text.Json.JsonValueKind.Object)
+                nodes = w;
+        }
+
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        void Walk(System.Text.Json.JsonElement el, string? parentKey)
+        {
+            if (el.ValueKind == System.Text.Json.JsonValueKind.Object)
+            {
+                // 节点 inputs
+                if (el.TryGetProperty("inputs", out var inputs) && inputs.ValueKind == System.Text.Json.JsonValueKind.Object)
+                {
+                    foreach (var prop in inputs.EnumerateObject())
+                    {
+                        var k = prop.Name;
+                        var v = prop.Value;
+                        if (v.ValueKind != System.Text.Json.JsonValueKind.String) continue;
+                        var s = v.GetString()?.Trim();
+                        if (string.IsNullOrEmpty(s) || s.Length < 8) continue;
+                        // 排除文件名 / 模型路径
+                        var low = s.ToLowerInvariant();
+                        if (low.EndsWith(".png") || low.EndsWith(".jpg") || low.EndsWith(".jpeg")
+                            || low.EndsWith(".webp") || low.EndsWith(".safetensors") || low.EndsWith(".ckpt")
+                            || low.EndsWith(".pt") || low.EndsWith(".bin")) continue;
+                        // 只要 prompt 相关字段，或较长的 on_false/on_true/value 文本
+                        var kl = k.ToLowerInvariant();
+                        bool isPromptKey = kl is "prompt" or "text" or "value" or "on_false" or "on_true"
+                            or "positive" or "negative" or "negative_prompt" or "string"
+                            || kl.Contains("prompt");
+                        // system prompt 很长也收，但标记由前端区分；这里全收纯字符串
+                        if (!isPromptKey && s.Length < 40) continue;
+                        if (seen.Add(s)) list.Add(s);
+                    }
+                }
+                foreach (var prop in el.EnumerateObject())
+                    Walk(prop.Value, prop.Name);
+            }
+            else if (el.ValueKind == System.Text.Json.JsonValueKind.Array)
+            {
+                foreach (var item in el.EnumerateArray())
+                    Walk(item, parentKey);
+            }
+        }
+        Walk(nodes, null);
+    }
+    catch { /* 非合法 JSON 就忽略 */ }
+    return list;
+}
+
+// ---------- PNG Prompt 提取（读取 AI 生成图内嵌的 prompt / parameters） ----------
+app.MapPost("/api/image/prompt", async (HttpContext context) =>
+{
+    var form = await context.Request.ReadFormAsync();
+    var file = form.Files.GetFile("file");
+    // 也支持直接贴 workflow JSON 文本（字段名 json）
+    var jsonBody = form["json"].ToString();
+
+    if (file == null && string.IsNullOrWhiteSpace(jsonBody))
+        return Results.BadRequest("请上传 PNG，或粘贴 ComfyUI workflow JSON");
+
+    log.LogInformation(">>> [prompt] 文件=[{FileName}] 大小={Len} jsonLen={JL}",
+        file?.FileName, file?.Length ?? 0, jsonBody?.Length ?? 0);
+
+    try
+    {
+        var texts = new List<object>();
+        string? mainPrompt = null;
+        string? parameters = null;
+        string? negativePrompt = null;
+        string? workflow = null;
+        int width = 0, height = 0;
+        string? fileName = file?.FileName;
+
+        if (file != null)
+        {
+            await using var stream = file.OpenReadStream();
+            using var image = await Image.LoadAsync(stream);
+            width = image.Width;
+            height = image.Height;
+
+            var pngMeta = image.Metadata.GetPngMetadata();
+            foreach (var t in pngMeta.TextData)
+            {
+                var key = t.Keyword ?? "";
+                var val = t.Value ?? "";
+                texts.Add(new { keyword = key, value = val });
+
+                var keyLower = key.ToLowerInvariant();
+                if (keyLower is "parameters" or "sd-metadata")
+                    parameters ??= val;
+                else if (keyLower is "prompt")
+                    mainPrompt ??= val;
+                else if (keyLower is "negative_prompt" or "negative prompt")
+                    negativePrompt ??= val;
+                else if (keyLower is "workflow" or "comfyui")
+                    workflow ??= val;
+                else if (keyLower is "comment" or "description")
+                {
+                    if (val.TrimStart().StartsWith('{') && parameters == null)
+                        parameters = val;
+                    else if (mainPrompt == null && val.Length > 0)
+                        mainPrompt = val;
+                }
+            }
+
+            var exif = image.Metadata.ExifProfile;
+            if (exif != null)
+            {
+                void AddExifString(string label, string? v)
+                {
+                    if (string.IsNullOrWhiteSpace(v)) return;
+                    texts.Add(new { keyword = "Exif:" + label, value = v });
+                    if (mainPrompt == null && (label is "ImageDescription" or "UserComment" or "XPComment"))
+                        mainPrompt = v;
+                }
+                if (exif.TryGetValue(SixLabors.ImageSharp.Metadata.Profiles.Exif.ExifTag.ImageDescription, out var desc) && desc?.Value != null)
+                    AddExifString("ImageDescription", desc.Value);
+                if (exif.TryGetValue(SixLabors.ImageSharp.Metadata.Profiles.Exif.ExifTag.Software, out var soft) && soft?.Value != null)
+                    AddExifString("Software", soft.Value);
+                if (exif.TryGetValue(SixLabors.ImageSharp.Metadata.Profiles.Exif.ExifTag.XPComment, out var xpc) && xpc?.Value != null)
+                    AddExifString("XPComment", xpc.Value);
+                if (exif.TryGetValue(SixLabors.ImageSharp.Metadata.Profiles.Exif.ExifTag.UserComment, out var uc) && uc?.Value != null)
+                    AddExifString("UserComment", uc.Value.Text);
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(jsonBody))
+        {
+            // 用户直接粘贴的 workflow / prompt JSON
+            mainPrompt ??= jsonBody;
+            texts.Add(new { keyword = "pasted_json", value = jsonBody });
+        }
+
+        // 从 A1111 风格 parameters 拆 prompt
+        if (!string.IsNullOrEmpty(parameters) && (string.IsNullOrEmpty(mainPrompt) || mainPrompt.TrimStart().StartsWith('{')))
+        {
+            var lines = parameters.Replace("\r\n", "\n").Split('\n');
+            var promptLines = new List<string>();
+            var negLines = new List<string>();
+            bool inNeg = false;
+            foreach (var line in lines)
+            {
+                if (line.StartsWith("Negative prompt:", StringComparison.OrdinalIgnoreCase))
+                {
+                    inNeg = true;
+                    var rest = line["Negative prompt:".Length..].Trim();
+                    if (!string.IsNullOrEmpty(rest)) negLines.Add(rest);
+                    continue;
+                }
+                if (inNeg && (line.StartsWith("Steps:", StringComparison.OrdinalIgnoreCase)
+                    || line.StartsWith("Sampler:", StringComparison.OrdinalIgnoreCase)
+                    || line.StartsWith("CFG scale:", StringComparison.OrdinalIgnoreCase)
+                    || line.StartsWith("Seed:", StringComparison.OrdinalIgnoreCase)
+                    || line.StartsWith("Size:", StringComparison.OrdinalIgnoreCase)
+                    || line.StartsWith("Model:", StringComparison.OrdinalIgnoreCase)))
+                    break;
+                if (inNeg) negLines.Add(line);
+                else promptLines.Add(line);
+            }
+            if (promptLines.Count > 0 && !string.Join("\n", promptLines).TrimStart().StartsWith('{'))
+                mainPrompt = string.Join("\n", promptLines).Trim();
+            if (negLines.Count > 0 && string.IsNullOrEmpty(negativePrompt))
+                negativePrompt = string.Join("\n", negLines).Trim();
+        }
+
+        // ★ ComfyUI：prompt / workflow 若是 JSON，解析出全部纯字符串 Prompt
+        var pureList = new List<string>();
+        pureList.AddRange(ExtractPurePromptsFromComfyJson(mainPrompt));
+        pureList.AddRange(ExtractPurePromptsFromComfyJson(workflow));
+        pureList.AddRange(ExtractPurePromptsFromComfyJson(parameters));
+        pureList.AddRange(ExtractPurePromptsFromComfyJson(jsonBody));
+        // 去重保序
+        var purePrompts = pureList.Distinct(StringComparer.Ordinal).ToList();
+
+        // 若 mainPrompt 本身是 JSON，用解析出的「最短非 system、像用户指令」的那条作为主 prompt
+        if (!string.IsNullOrEmpty(mainPrompt) && mainPrompt.TrimStart().StartsWith('{') && purePrompts.Count > 0)
+        {
+            // 优先取较短、不含 # 标题的用户指令（system prompt 通常很长且以 # 开头）
+            var userLike = purePrompts
+                .Where(s => !s.TrimStart().StartsWith('#') && s.Length < 2000)
+                .OrderBy(s => s.Length)
+                .FirstOrDefault();
+            mainPrompt = userLike ?? purePrompts.OrderBy(s => s.Length).First();
+        }
+
+        var hasAny = texts.Count > 0 || purePrompts.Count > 0;
+        return Results.Json(new
+        {
+            ok = true,
+            fileName,
+            width,
+            height,
+            hasMetadata = hasAny,
+            prompt = mainPrompt,
+            negativePrompt,
+            parameters,
+            workflow,
+            purePrompts, // ★ 前端主显示：完整纯 Prompt 列表
+            texts
+        });
+    }
+    catch (UnknownImageFormatException)
+    {
+        return Results.BadRequest("无法识别为图片，请上传 PNG，或粘贴 ComfyUI workflow JSON");
+    }
+    catch (Exception ex)
+    {
+        log.LogError(ex, "[prompt] 提取失败");
+        return Results.Json(new { error = ex.Message }, statusCode: 500);
+    }
+});
+
 app.Run();

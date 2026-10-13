@@ -146,6 +146,7 @@
                 <!-- 注入二维码 Tab -->
                 <div class="tab" onclick="switchMode('qrcode', this)">二维码生成</div>
                 <div class="tab" onclick="switchMode('grid', this)">网格切图</div>
+                <div class="tab" onclick="switchMode('prompt', this)">PNG Prompt</div>
                 <div class="tab" onclick="switchMode('audio', this)">音视频转换</div>
                 <div class="tab" onclick="switchMode('ffmpeg', this)">FFmpeg 工具</div>
             </div>
@@ -253,6 +254,52 @@
                     </div>
                 </div>
 
+                <!-- PNG Prompt 提取 UI -->
+                <div id="prompt-ui" style="display:none;">
+                    <div class="upload-drop-zone" id="promptDropZone" onclick="document.getElementById('promptFileInput').click()">
+                        <span id="promptDropText">点击或拖拽 PNG 到这里（读取内嵌 Prompt）</span>
+                        <input type="file" id="promptFileInput" hidden accept="image/png,image/*,.png" onchange="handlePromptFile(this.files[0])">
+                    </div>
+                    <div style="margin:12px 0;">
+                        <label style="font-size:13px;color:#555;">或直接粘贴 ComfyUI workflow / prompt JSON：</label>
+                        <textarea id="promptJsonPaste" rows="4" placeholder='粘贴 {"461":{...}} 整段 workflow JSON，点「解析」' style="width:100%; box-sizing:border-box; margin-top:6px; padding:10px; font-family:Consolas,monospace; font-size:12px; border:1px solid #ddd; border-radius:4px; resize:vertical;"></textarea>
+                        <button onclick="parsePromptJsonPaste()" style="margin-top:8px; padding:6px 16px; cursor:pointer; background:#0078d4; color:#fff; border:none; border-radius:3px;">解析 JSON</button>
+                    </div>
+                    <div id="promptMsg" style="font-size:12px; color:#999; margin-bottom:10px;">就绪 · PNG 元数据 / ComfyUI workflow JSON → 纯 Prompt（完整显示）</div>
+                    <div id="promptResult" style="display:none;">
+                        <div class="config-bar" style="flex-wrap:wrap; gap:12px; align-items:center;">
+                            <span id="promptMetaInfo" style="font-size:13px;color:#555;"></span>
+                            <button onclick="copyPromptText('promptText')" style="padding:6px 14px; cursor:pointer; background:#0078d4; color:#fff; border:none; border-radius:3px;">复制主 Prompt</button>
+                            <button onclick="copyPromptText('purePromptsText')" style="padding:6px 14px; cursor:pointer; background:#5cb85c; color:#fff; border:none; border-radius:3px;">复制全部纯 Prompt</button>
+                            <button onclick="copyPromptText('negPromptText')" style="padding:6px 14px; cursor:pointer;">复制 Negative</button>
+                            <button onclick="copyAllPromptMeta()" style="padding:6px 14px; cursor:pointer;">复制全部</button>
+                        </div>
+                        <div style="margin-top:12px;">
+                            <label style="font-size:14px;font-weight:bold;color:#0078d4;">★ 纯 Prompt（完整显示，非 JSON）</label>
+                            <textarea id="promptText" readonly rows="10" style="width:100%; box-sizing:border-box; margin-top:6px; padding:12px; font-family:Consolas,'Microsoft YaHei',monospace; font-size:14px; line-height:1.55; border:2px solid #0078d4; border-radius:4px; resize:vertical; background:#f8fbff; white-space:pre-wrap;"></textarea>
+                        </div>
+                        <div style="margin-top:12px;">
+                            <label style="font-size:13px;font-weight:bold;color:#333;">全部纯 Prompt 列表（ComfyUI 解析，多条完整）</label>
+                            <textarea id="purePromptsText" readonly rows="14" style="width:100%; box-sizing:border-box; margin-top:4px; padding:12px; font-family:Consolas,'Microsoft YaHei',monospace; font-size:13px; line-height:1.5; border:1px solid #5cb85c; border-radius:4px; resize:vertical; background:#f6fff6; white-space:pre-wrap;"></textarea>
+                        </div>
+                        <div style="margin-top:12px;">
+                            <label style="font-size:13px;font-weight:bold;color:#333;">Negative Prompt</label>
+                            <textarea id="negPromptText" readonly rows="2" style="width:100%; box-sizing:border-box; margin-top:4px; padding:10px; font-family:Consolas,monospace; font-size:13px; border:1px solid #ddd; border-radius:4px; resize:vertical;"></textarea>
+                        </div>
+                        <details style="margin-top:12px;">
+                            <summary style="cursor:pointer;font-size:13px;color:#666;">Parameters / 原始元数据（可能很长）</summary>
+                            <textarea id="paramsText" readonly rows="6" style="width:100%; box-sizing:border-box; margin-top:8px; padding:10px; font-family:Consolas,monospace; font-size:12px; border:1px solid #ddd; border-radius:4px; resize:vertical; background:#fafafa;"></textarea>
+                        </details>
+                        <details style="margin-top:12px;">
+                            <summary style="cursor:pointer;font-size:13px;color:#666;">全部文本块 (texts)</summary>
+                            <pre id="allTextsPre" style="margin-top:8px; padding:12px; background:#f5f5f5; border:1px solid #eee; border-radius:4px; font-size:12px; max-height:300px; overflow:auto; white-space:pre-wrap; word-break:break-all;"></pre>
+                        </details>
+                    </div>
+                    <div style="font-size:12px;color:#888;line-height:1.6; margin-top:16px;">
+                        说明：PNG 的 prompt/workflow/parameters 若是 ComfyUI JSON，自动拆成<strong>纯文字 Prompt</strong>完整显示；也可直接粘贴 workflow JSON 点解析。
+                    </div>
+                </div>
+
             </div>
         </div>
     </div>
@@ -262,12 +309,15 @@
         let loadedFile = null;
 
         function switchMode(mode, el) {
-            document.getElementById('image-process-ui').style.display = (mode === 'qrcode' || mode === 'audio' || mode === 'ffmpeg') ? 'none' : 'block';
+            const specialModes = ['qrcode', 'audio', 'ffmpeg', 'prompt'];
+            document.getElementById('image-process-ui').style.display = specialModes.includes(mode) ? 'none' : 'block';
             document.getElementById('qrcode-ui').style.display = mode === 'qrcode' ? 'block' : 'none';
             var au = document.getElementById('audio-ui');
             if (au) au.style.display = mode === 'audio' ? 'block' : 'none';
             var ff = document.getElementById('ffmpeg-ui');
             if (ff) ff.style.display = mode === 'ffmpeg' ? 'block' : 'none';
+            var pu = document.getElementById('prompt-ui');
+            if (pu) pu.style.display = mode === 'prompt' ? 'block' : 'none';
 
             currentMode = mode;
             document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
@@ -280,7 +330,7 @@
             if (mode === 'qrcode') {
                 imgUI.style.display = 'none';
                 qrUI.style.display = 'block';
-            } else if (mode === 'audio' || mode === 'ffmpeg') {
+            } else if (mode === 'audio' || mode === 'ffmpeg' || mode === 'prompt') {
                 imgUI.style.display = 'none';
                 qrUI.style.display = 'none';
                 if (mode === 'ffmpeg') onFfmpegToolChange();
@@ -554,6 +604,7 @@
                         <select id="ffRatio">
                             <option value="16:9" selected>16:9（横屏宽）</option>
                             <option value="4:3">4:3</option>
+                            <option value="3:4">3:4（竖屏）</option>
                             <option value="1:1">1:1（正方形）</option>
                             <option value="9:16">9:16（竖屏）</option>
                             <option value="21:9">21:9（超宽）</option>
@@ -638,6 +689,144 @@
             dz.ondragover = (e) => { e.preventDefault(); dz.classList.add('dragover'); };
             dz.ondragleave = () => dz.classList.remove('dragover');
             dz.ondrop = (e) => { e.preventDefault(); dz.classList.remove('dragover'); handleFfmpegFile(e.dataTransfer.files[0]); };
+        })();
+
+        // ---------- PNG Prompt 提取 ----------
+        let promptLoadedFile = null;
+
+        function handlePromptFile(file) {
+            if (!file) return;
+            promptLoadedFile = file;
+            document.getElementById('promptDropText').innerText = file.name + ' (' + (file.size / 1024).toFixed(1) + ' KB)';
+            document.getElementById('promptResult').style.display = 'none';
+            extractPrompt();
+        }
+
+        function fillPromptResult(data) {
+            document.getElementById('promptResult').style.display = 'block';
+            const dim = (data.width && data.height) ? ` · ${data.width}×${data.height}` : '';
+            document.getElementById('promptMetaInfo').innerText =
+                `${data.fileName || 'JSON'}${dim}` +
+                (data.hasMetadata ? ' · 已找到元数据' : ' · 未找到文本元数据') +
+                (data.purePrompts && data.purePrompts.length ? ` · 纯Prompt ${data.purePrompts.length} 条` : '');
+
+            // 主 Prompt：优先用解析出的纯文字，绝不塞整段 JSON
+            let main = data.prompt || '';
+            if (main.trim().startsWith('{') && data.purePrompts && data.purePrompts.length) {
+                const userLike = data.purePrompts.find(s => !s.trim().startsWith('#') && s.length < 2000)
+                    || data.purePrompts[0];
+                main = userLike;
+            }
+            document.getElementById('promptText').value = main;
+
+            // 全部纯 Prompt 完整列表
+            const pureEl = document.getElementById('purePromptsText');
+            if (data.purePrompts && data.purePrompts.length) {
+                pureEl.value = data.purePrompts.map((s, i) =>
+                    `========== [${i + 1}/${data.purePrompts.length}] ==========\n${s}`
+                ).join('\n\n');
+            } else {
+                pureEl.value = main || '(无)';
+            }
+
+            document.getElementById('negPromptText').value = data.negativePrompt || '';
+            let params = data.parameters || '';
+            if (data.workflow) params = (params ? params + '\n\n--- workflow ---\n' : '') + data.workflow;
+            if (!params && data.texts && data.texts.length)
+                params = data.texts.map(t => `[${t.keyword}]\n${t.value}`).join('\n\n');
+            document.getElementById('paramsText').value = params;
+            document.getElementById('allTextsPre').textContent =
+                data.texts && data.texts.length ? JSON.stringify(data.texts, null, 2) : '(无文本块)';
+        }
+
+        async function extractPrompt() {
+            if (!promptLoadedFile) return;
+            const msg = document.getElementById('promptMsg');
+            msg.innerText = '正在读取元数据...';
+            msg.style.color = '#999';
+            try {
+                const fd = new FormData();
+                fd.append('file', promptLoadedFile);
+                const resp = await fetch('/api/image/prompt', { method: 'POST', body: fd });
+                const data = await resp.json();
+                if (!resp.ok) {
+                    msg.innerText = '失败: ' + (data.error || data || resp.statusText);
+                    msg.style.color = '#c00';
+                    return;
+                }
+                fillPromptResult(data);
+                msg.innerText = data.hasMetadata ? '读取成功 · 纯 Prompt 已完整显示' : '图片中没有可识别的 prompt 元数据';
+                msg.style.color = data.hasMetadata ? '#5cb85c' : '#c90';
+            } catch (e) {
+                msg.innerText = '请求失败: ' + e.message;
+                msg.style.color = '#c00';
+            }
+        }
+
+        async function parsePromptJsonPaste() {
+            const raw = (document.getElementById('promptJsonPaste').value || '').trim();
+            const msg = document.getElementById('promptMsg');
+            if (!raw) {
+                msg.innerText = '请先粘贴 workflow / prompt JSON';
+                msg.style.color = '#c00';
+                return;
+            }
+            msg.innerText = '正在解析 JSON...';
+            msg.style.color = '#999';
+            try {
+                const fd = new FormData();
+                fd.append('json', raw);
+                const resp = await fetch('/api/image/prompt', { method: 'POST', body: fd });
+                const data = await resp.json();
+                if (!resp.ok) {
+                    msg.innerText = '失败: ' + (data.error || data || resp.statusText);
+                    msg.style.color = '#c00';
+                    return;
+                }
+                fillPromptResult(data);
+                msg.innerText = (data.purePrompts && data.purePrompts.length)
+                    ? `解析成功 · 抽出 ${data.purePrompts.length} 条纯 Prompt，完整显示在下方`
+                    : '解析完成，但未抽出明显 Prompt 字符串';
+                msg.style.color = '#5cb85c';
+            } catch (e) {
+                msg.innerText = '请求失败: ' + e.message;
+                msg.style.color = '#c00';
+            }
+        }
+
+        function copyPromptText(id) {
+            const el = document.getElementById(id);
+            if (!el || !el.value) return;
+            navigator.clipboard.writeText(el.value).then(() => {
+                document.getElementById('promptMsg').innerText = '已复制到剪贴板';
+                document.getElementById('promptMsg').style.color = '#5cb85c';
+            }).catch(() => {
+                el.select();
+                document.execCommand('copy');
+            });
+        }
+
+        function copyAllPromptMeta() {
+            const p = document.getElementById('promptText').value;
+            const pure = document.getElementById('purePromptsText').value;
+            const n = document.getElementById('negPromptText').value;
+            let text = '';
+            if (p) text += 'Prompt:\n' + p + '\n\n';
+            if (pure && pure !== p) text += '全部纯 Prompt:\n' + pure + '\n\n';
+            if (n) text += 'Negative prompt:\n' + n + '\n\n';
+            if (!text) return;
+            navigator.clipboard.writeText(text.trim()).then(() => {
+                document.getElementById('promptMsg').innerText = '已复制全部到剪贴板';
+                document.getElementById('promptMsg').style.color = '#5cb85c';
+            });
+        }
+
+        (function(){
+            const dz = document.getElementById('promptDropZone');
+            if (!dz) return;
+            dz.ondragover = (e) => { e.preventDefault(); dz.classList.add('dragover'); };
+            dz.ondragleave = () => dz.classList.remove('dragover');
+            dz.ondrop = (e) => { e.preventDefault(); dz.classList.remove('dragover'); handlePromptFile(e.dataTransfer.files[0]); };
         })();
 
         window.onload = () => {

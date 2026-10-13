@@ -10,6 +10,7 @@
 - 转格式（PNG/JPG/WEBP/BMP）
 - 网格切图（自动识别 / 去底色）
 - 二维码生成
+- **PNG Prompt 提取**：上传 PNG，读取内嵌的 prompt / parameters（兼容 A1111、ComfyUI、NovelAI 等）
 
 ### 音视频（新增）
 - **MP4 / 视频 / 音频 → MP3、WAV**（以及 FLAC / AAC / M4A / OGG / OPUS）
@@ -70,6 +71,7 @@ docker run -d \
 | POST | /api/image/convert | 图片格式转换 |
 | GET  | /api/image/qrcode | 二维码 |
 | POST | /api/image/grid | 网格切图 → zip |
+| POST | /api/image/prompt | **PNG Prompt 提取**（返回 JSON：prompt / negative / parameters / texts） |
 | POST | /api/audio/convert | **音视频 → MP3/WAV/...** |
 | GET  | /api/audio/status | ffmpeg 与支持格式 |
 | POST | /api/video/tomp4 | **任意视频 → MP4**（含 FLV→MP4） |
