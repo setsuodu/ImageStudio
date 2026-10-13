@@ -19,11 +19,13 @@
 - 状态：`GET /api/audio/status`（检查 ffmpeg 是否可用）
 
 ### FFmpeg 视频工具（专页）
+- **视频转 MP4**：FLV / MKV / AVI / MOV 等 → MP4（优先 `-c copy` 只换容器，失败自动重编码）
 - **视频裁剪**：去头/去尾/截取区间（对应 `-ss` / `-to` / `-t`，支持 `-c copy` 快速剪切）
 - **修改视频码率**：默认 3000k，libx264 + 音频 copy
 - **视频转序列帧**：按 fps 导出 PNG，打包 zip
 - **水平等分**：取左半 / 右半 / 两侧（zip）
 - 接口：
+  - `POST /api/video/tomp4?crf=23`（可选 `&reencode=1` 强制重编码）
   - `POST /api/video/trim?start=46&end=120` 或 `?start=46&duration=74`
   - `POST /api/video/bitrate?bitrate=3000`
   - `POST /api/video/frames?fps=24&max=100`
@@ -70,6 +72,7 @@ docker run -d \
 | POST | /api/image/grid | 网格切图 → zip |
 | POST | /api/audio/convert | **音视频 → MP3/WAV/...** |
 | GET  | /api/audio/status | ffmpeg 与支持格式 |
+| POST | /api/video/tomp4 | **任意视频 → MP4**（含 FLV→MP4） |
 | POST | /api/video/trim | 视频裁剪（start/end/duration） |
 | POST | /api/video/bitrate | 修改视频码率 |
 | POST | /api/video/frames | 视频转序列帧 → zip |

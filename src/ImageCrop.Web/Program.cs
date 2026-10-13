@@ -480,11 +480,45 @@ app.MapPost("/api/video/aspect", async (HttpContext context) =>
     catch (Exception ex) { return Results.Json(new { error = ex.Message }, statusCode: 500); }
 });
 
+app.MapPost("/api/video/tomp4", async (HttpContext context) =>
+{
+    if (!VideoFfmpeg.IsFfmpegAvailable())
+        return Results.Json(new { error = "服务器未安装 ffmpeg" }, statusCode: 503);
+
+    var form = await context.Request.ReadFormAsync();
+    var file = form.Files.GetFile("file");
+    if (file == null) return Results.BadRequest("No file uploaded");
+    if (file.Length > VideoMaxBytes) return Results.BadRequest($"文件过大，限制 {VideoMaxBytes / 1024 / 1024} MB");
+
+    log.LogInformation(">>> [video/tomp4] 收到文件名=[{FileName}] 大小={Len}", file.FileName, file.Length);
+
+    // 默认优先 -c copy（仅换容器）；?reencode=1 强制重新编码
+    bool copyCodec = !string.Equals(context.Request.Query["reencode"], "1", StringComparison.OrdinalIgnoreCase);
+
+    int crf = 23;
+    if (int.TryParse(context.Request.Query["crf"], out var c) && c >= 10 && c <= 35) crf = c;
+
+    try
+    {
+        await using var stream = file.OpenReadStream();
+        var (outPath, contentType, outName) = await VideoFfmpeg.ConvertToMp4Async(
+            stream, file.FileName ?? "input.flv", copyCodec, crf, context.RequestAborted);
+
+        log.LogInformation(">>> [video/tomp4] 返回下载名=[{OutName}]", outName);
+
+        var bytes = await File.ReadAllBytesAsync(outPath);
+        try { File.Delete(outPath); } catch { }
+        return FileBytes(context, bytes, contentType, outName);
+    }
+    catch (ArgumentException ex) { return Results.BadRequest(ex.Message); }
+    catch (Exception ex) { return Results.Json(new { error = ex.Message }, statusCode: 500); }
+});
+
 app.MapGet("/api/video/status", () => Results.Json(new
 {
     ffmpeg = VideoFfmpeg.IsFfmpegAvailable(),
     input = VideoFfmpeg.SupportedVideoExt.OrderBy(x => x).ToArray(),
-    tools = new[] { "trim", "bitrate", "frames", "split", "aspect" }
+    tools = new[] { "trim", "bitrate", "frames", "split", "aspect", "tomp4" }
 }));
 
 app.Run();

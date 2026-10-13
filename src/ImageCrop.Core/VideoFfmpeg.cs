@@ -219,6 +219,62 @@ public static class VideoFfmpeg
 
 
     /// <summary>
+    /// 任意支持格式 → MP4（含 FLV → MP4）
+    /// copyCodec=true 时优先 -c copy（仅换容器，极快）；失败或明确要求时重新编码。
+    /// 下载名 = 原主文件名.mp4
+    /// </summary>
+    public static async Task<(string OutputPath, string ContentType, string FileName)> ConvertToMp4Async(
+        Stream inputStream,
+        string originalFileName,
+        bool copyCodec = true,
+        int crf = 23,
+        CancellationToken ct = default)
+    {
+        if (crf < 10) crf = 10;
+        if (crf > 35) crf = 35;
+
+        var (workDir, inputPath, baseName, _) = await PrepareInputAsync(inputStream, originalFileName, ct);
+        var outExt = ".mp4";
+        var outputPath = Path.Combine(workDir, "output" + outExt);
+
+        try
+        {
+            string args;
+            if (copyCodec)
+            {
+                // 优先只换容器，不重新编码
+                args = $"-y -i \"{inputPath}\" -c copy -movflags +faststart \"{outputPath}\"";
+                var (exitCode, stderr) = await RunFfmpegAsync(args, ct);
+                if (exitCode != 0 || !File.Exists(outputPath))
+                {
+                    // copy 失败则回退到重新编码
+                    args = $"-y -i \"{inputPath}\" -c:v libx264 -crf {crf} -preset medium -c:a aac -b:a 128k -pix_fmt yuv420p -movflags +faststart \"{outputPath}\"";
+                    (exitCode, stderr) = await RunFfmpegAsync(args, ct);
+                    if (exitCode != 0 || !File.Exists(outputPath))
+                        throw new InvalidOperationException($"FFmpeg 转 MP4 失败 (code={exitCode}): {Truncate(stderr, 500)}");
+                }
+            }
+            else
+            {
+                args = $"-y -i \"{inputPath}\" -c:v libx264 -crf {crf} -preset medium -c:a aac -b:a 128k -pix_fmt yuv420p -movflags +faststart \"{outputPath}\"";
+                var (exitCode, stderr) = await RunFfmpegAsync(args, ct);
+                if (exitCode != 0 || !File.Exists(outputPath))
+                    throw new InvalidOperationException($"FFmpeg 转 MP4 失败 (code={exitCode}): {Truncate(stderr, 500)}");
+            }
+
+            var finalPath = CopyToFinal(outputPath, outExt);
+            var outName = string.IsNullOrWhiteSpace(originalFileName)
+                ? baseName + outExt
+                : Path.GetFileNameWithoutExtension(Path.GetFileName(originalFileName)) + outExt;
+            return (finalPath, "video/mp4", outName);
+        }
+        finally
+        {
+            TryDeleteDir(workDir);
+        }
+    }
+
+    /// <summary>
     /// 修改画面比例（如 1:1 → 16:9 / 4:3 / 9:16 等）
     /// mode=pad：留黑边保持完整画面；mode=crop：裁切铺满目标比例
     /// 下载名 = 原文件名（完全不变）
