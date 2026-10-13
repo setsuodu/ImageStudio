@@ -275,21 +275,22 @@ public static class VideoFfmpeg
     }
 
     /// <summary>
-    /// 修改画面比例（如 1:1 → 16:9 / 4:3 / 9:16 等）
-    /// mode=pad：留黑边保持完整画面；mode=crop：裁切铺满目标比例
-    /// 下载名 = 原文件名（完全不变）
+    /// 修改画面比例（如 9:16 → 3:4）
+    /// mode=stretch（默认）：整幅缩放拉伸到目标比例，不裁、不加黑边（可能轻微变形）
+    /// mode=crop：裁切铺满；mode=pad：黑边补齐
     /// </summary>
     public static async Task<(string OutputPath, string ContentType, string FileName)> ChangeAspectAsync(
         Stream inputStream,
         string originalFileName,
         string ratio = "16:9",
-        string mode = "pad", // pad | crop
+        string mode = "stretch", // stretch | crop | pad
         CancellationToken ct = default)
     {
         ratio = (ratio ?? "16:9").Trim();
-        mode = (mode ?? "pad").ToLowerInvariant();
-        if (mode != "pad" && mode != "crop")
-            throw new ArgumentException("mode 仅支持 pad 或 crop");
+        mode = (mode ?? "stretch").ToLowerInvariant();
+        if (mode == "scale") mode = "stretch";
+        if (mode is not ("stretch" or "crop" or "pad"))
+            throw new ArgumentException("mode 仅支持 stretch / crop / pad");
 
         var parts = ratio.Split(new[] { ':', '：', '/', 'x', 'X', '*' }, StringSplitOptions.RemoveEmptyEntries);
         if (parts.Length != 2
@@ -297,33 +298,40 @@ public static class VideoFfmpeg
                 System.Globalization.CultureInfo.InvariantCulture, out var rw) || rw <= 0
             || !double.TryParse(parts[1].Trim(), System.Globalization.NumberStyles.Float,
                 System.Globalization.CultureInfo.InvariantCulture, out var rh) || rh <= 0)
-            throw new ArgumentException($"无效比例: {ratio}，示例: 16:9 / 4:3 / 1:1 / 9:16");
+            throw new ArgumentException($"无效比例: {ratio}，示例: 16:9 / 4:3 / 3:4 / 9:16");
 
-        // 目标宽高比 TAR = rw/rh（用 Invariant 写入表达式）
         var tar = (rw / rh).ToString("0.########", System.Globalization.CultureInfo.InvariantCulture);
-        var inv = (rh / rw).ToString("0.########", System.Globalization.CultureInfo.InvariantCulture); // 1/TAR
+        var inv = (rh / rw).ToString("0.########", System.Globalization.CultureInfo.InvariantCulture);
 
         var (workDir, inputPath, baseName, ext) = await PrepareInputAsync(inputStream, originalFileName, ct);
-        var outExt = string.IsNullOrEmpty(ext) ? ".mp4" : ext;
-        // 输出统一 mp4，兼容性更好
-        outExt = ".mp4";
+        var outExt = ".mp4";
         var outputPath = Path.Combine(workDir, "output" + outExt);
 
         try
         {
-            // a = iw/ih
-            // crop: 裁出目标比例最大居中区域
-            // pad:  缩放到能装进目标比例，再黑边补齐
             string vf;
-            if (mode == "crop")
+            if (mode == "stretch")
             {
-                vf = $"crop='if(gt(a\\,{tar})\\,ih*{tar}\\,iw)':'if(gt(a\\,{tar})\\,ih\\,iw*{inv})',"
+                // ★ 缩放拉伸：整幅画面拉到目标宽高比，不裁、不垫黑边
+                // 以原图较长边为基准，另一边按目标比例算出，强制 scale 过去
+                // 目标竖屏(tar<=1)：高=max(iw,ih)，宽=高*tar
+                // 目标横屏(tar>1)：宽=max(iw,ih)，高=宽*inv
+                vf = "scale=iw*sar:ih,setsar=1,"
+                   + "scale="
+                   + $"trunc(if(lte({tar}\\,1)\\,max(iw\\,ih)*{tar}\\,max(iw\\,ih))/2)*2:"
+                   + $"trunc(if(lte({tar}\\,1)\\,max(iw\\,ih)\\,max(iw\\,ih)*{inv})/2)*2,"
+                   + "setsar=1";
+            }
+            else if (mode == "crop")
+            {
+                vf = "scale=iw*sar:ih,setsar=1,"
+                   + $"crop=min(iw\\,ih*{tar}):min(ih\\,iw*{inv}):(iw-ow)/2:(ih-oh)/2,"
                    + "scale=trunc(iw/2)*2:trunc(ih/2)*2,setsar=1";
             }
-            else
+            else // pad
             {
-                vf = $"scale='if(gt(a\\,{tar})\\,ih*{tar}\\,iw)':'if(gt(a\\,{tar})\\,ih\\,iw*{inv})',"
-                   + $"pad='iw':'iw*{inv}':(ow-iw)/2:(oh-ih)/2:black,"
+                vf = "scale=iw*sar:ih,setsar=1,"
+                   + $"pad=max(iw\\,ih*{tar}):max(ih\\,iw*{inv}):(ow-iw)/2:(oh-ih)/2:black,"
                    + "scale=trunc(iw/2)*2:trunc(ih/2)*2,setsar=1";
             }
 
@@ -333,7 +341,6 @@ public static class VideoFfmpeg
                 throw new InvalidOperationException($"FFmpeg 改比例失败 (code={exitCode}): {Truncate(stderr, 500)}");
 
             var finalPath = CopyToFinal(outputPath, outExt);
-            // 下载名保持原主文件名，扩展名 .mp4
             var outName = string.IsNullOrWhiteSpace(originalFileName)
                 ? baseName + outExt
                 : Path.GetFileNameWithoutExtension(Path.GetFileName(originalFileName)) + outExt;

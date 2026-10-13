@@ -462,7 +462,7 @@ app.MapPost("/api/video/aspect", async (HttpContext context) =>
     var ratio = context.Request.Query["ratio"].ToString();
     if (string.IsNullOrWhiteSpace(ratio)) ratio = "16:9";
     var mode = context.Request.Query["mode"].ToString();
-    if (string.IsNullOrWhiteSpace(mode)) mode = "pad";
+    if (string.IsNullOrWhiteSpace(mode)) mode = "stretch"; // 默认缩放拉伸，不裁不加黑边
 
     try
     {

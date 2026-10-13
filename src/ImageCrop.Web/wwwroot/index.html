@@ -614,11 +614,12 @@
                     </label>
                     <label>方式:
                         <select id="ffAspectMode">
-                            <option value="pad" selected>黑边补齐（完整画面）</option>
-                            <option value="crop">裁切铺满（可能裁掉边缘）</option>
+                            <option value="stretch" selected>缩放拉伸（整幅拉到目标比例，不裁不加黑边）</option>
+                            <option value="crop">裁切铺满（裁掉多余边缘）</option>
+                            <option value="pad">黑边补齐（不足处加黑边）</option>
                         </select>
                     </label>
-                    <span style="font-size:12px;color:#888;">例：640×640(1:1) → 16:9</span>
+                    <span style="font-size:12px;color:#888;">例：9:16 → 3:4 选「缩放拉伸」= 540×960 直接变成 720×960</span>
                 `;
             }
         }
