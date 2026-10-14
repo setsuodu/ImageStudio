@@ -146,7 +146,7 @@
                 <!-- 注入二维码 Tab -->
                 <div class="tab" onclick="switchMode('qrcode', this)">二维码生成</div>
                 <div class="tab" onclick="switchMode('grid', this)">网格切图</div>
-                <div class="tab" onclick="switchMode('prompt', this)">PNG Prompt</div>
+                <div class="tab" onclick="switchMode('prompt', this)">Prompt 提取</div>
                 <div class="tab" onclick="switchMode('audio', this)">音视频转换</div>
                 <div class="tab" onclick="switchMode('ffmpeg', this)">FFmpeg 工具</div>
             </div>
@@ -254,18 +254,18 @@
                     </div>
                 </div>
 
-                <!-- PNG Prompt 提取 UI -->
+                <!-- PNG / MP4 Prompt 提取 UI -->
                 <div id="prompt-ui" style="display:none;">
                     <div class="upload-drop-zone" id="promptDropZone" onclick="document.getElementById('promptFileInput').click()">
-                        <span id="promptDropText">点击或拖拽 PNG 到这里（读取内嵌 Prompt）</span>
-                        <input type="file" id="promptFileInput" hidden accept="image/png,image/*,.png" onchange="handlePromptFile(this.files[0])">
+                        <span id="promptDropText">点击或拖拽 PNG / MP4 到这里（读取内嵌 Prompt）</span>
+                        <input type="file" id="promptFileInput" hidden accept="image/png,image/*,.png,video/mp4,video/*,.mp4,.mov,.webm,.mkv" onchange="handlePromptFile(this.files[0])">
                     </div>
                     <div style="margin:12px 0;">
                         <label style="font-size:13px;color:#555;">或直接粘贴 ComfyUI workflow / prompt JSON：</label>
                         <textarea id="promptJsonPaste" rows="4" placeholder='粘贴 {"461":{...}} 整段 workflow JSON，点「解析」' style="width:100%; box-sizing:border-box; margin-top:6px; padding:10px; font-family:Consolas,monospace; font-size:12px; border:1px solid #ddd; border-radius:4px; resize:vertical;"></textarea>
                         <button onclick="parsePromptJsonPaste()" style="margin-top:8px; padding:6px 16px; cursor:pointer; background:#0078d4; color:#fff; border:none; border-radius:3px;">解析 JSON</button>
                     </div>
-                    <div id="promptMsg" style="font-size:12px; color:#999; margin-bottom:10px;">就绪 · PNG 元数据 / ComfyUI workflow JSON → 纯 Prompt（完整显示）</div>
+                    <div id="promptMsg" style="font-size:12px; color:#999; margin-bottom:10px;">就绪 · PNG 元数据 / 视频元数据 / ComfyUI workflow JSON → 纯 Prompt（完整显示）</div>
                     <div id="promptResult" style="display:none;">
                         <div class="config-bar" style="flex-wrap:wrap; gap:12px; align-items:center;">
                             <span id="promptMetaInfo" style="font-size:13px;color:#555;"></span>
@@ -296,7 +296,7 @@
                         </details>
                     </div>
                     <div style="font-size:12px;color:#888;line-height:1.6; margin-top:16px;">
-                        说明：PNG 的 prompt/workflow/parameters 若是 ComfyUI JSON，自动拆成<strong>纯文字 Prompt</strong>完整显示；也可直接粘贴 workflow JSON 点解析。
+                        说明：PNG 元数据 / MP4 视频标签（comment、description 等）里的 prompt/workflow/parameters 若是 ComfyUI JSON，自动拆成<strong>纯文字 Prompt</strong>完整显示；也可直接粘贴 workflow JSON 点解析。支持同一拖拽框导入 PNG 或 MP4。
                     </div>
                 </div>
 
@@ -705,7 +705,10 @@
         function handlePromptFile(file) {
             if (!file) return;
             promptLoadedFile = file;
-            document.getElementById('promptDropText').innerText = file.name + ' (' + (file.size / 1024).toFixed(1) + ' KB)';
+            const sizeStr = file.size > 1024 * 1024
+                ? (file.size / 1024 / 1024).toFixed(2) + ' MB'
+                : (file.size / 1024).toFixed(1) + ' KB';
+            document.getElementById('promptDropText').innerText = file.name + ' (' + sizeStr + ')';
             document.getElementById('promptResult').style.display = 'none';
             extractPrompt();
         }
@@ -718,12 +721,24 @@
                 (data.hasMetadata ? ' · 已找到元数据' : ' · 未找到文本元数据') +
                 (data.purePrompts && data.purePrompts.length ? ` · 纯Prompt ${data.purePrompts.length} 条` : '');
 
-            // 主 Prompt：优先用解析出的纯文字，绝不塞整段 JSON
+            // 主 Prompt：后端已按「自然语言优先」选好；仅当仍是 JSON 时再本地兜底
             let main = data.prompt || '';
             if (main.trim().startsWith('{') && data.purePrompts && data.purePrompts.length) {
-                const userLike = data.purePrompts.find(s => !s.trim().startsWith('#') && s.length < 2000)
-                    || data.purePrompts[0];
-                main = userLike;
+                // 优先长描述 / 含中文，避开公式
+                const scored = data.purePrompts.map((s, i) => {
+                    let score = 0;
+                    const t = (s || '').trim();
+                    if (t.startsWith('#')) score -= 1000;
+                    if (/round\s*\(|max\s*\(|min\s*\(/.test(t) || (t.match(/[()]/g) || []).length >= 4)
+                        score -= 500;
+                    if (t.length > 40) score += 50;
+                    if (t.length > 80) score += 80;
+                    if (/[\u4e00-\u9fff]/.test(t)) score += 120;
+                    if (/[ ，。,]/.test(t)) score += 30;
+                    score += Math.max(0, 20 - i);
+                    return { s, score };
+                }).sort((a, b) => b.score - a.score);
+                main = scored[0]?.s || data.purePrompts[0];
             }
             document.getElementById('promptText').value = main;
 

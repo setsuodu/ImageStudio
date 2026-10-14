@@ -588,7 +588,7 @@ static List<string> ExtractPurePromptsFromComfyJson(string? jsonText)
     return list;
 }
 
-// ---------- PNG Prompt 提取（读取 AI 生成图内嵌的 prompt / parameters） ----------
+// ---------- PNG / MP4 Prompt 提取（读取 AI 生成图/视频内嵌的 prompt / parameters） ----------
 app.MapPost("/api/image/prompt", async (HttpContext context) =>
 {
     var form = await context.Request.ReadFormAsync();
@@ -597,7 +597,7 @@ app.MapPost("/api/image/prompt", async (HttpContext context) =>
     var jsonBody = form["json"].ToString();
 
     if (file == null && string.IsNullOrWhiteSpace(jsonBody))
-        return Results.BadRequest("请上传 PNG，或粘贴 ComfyUI workflow JSON");
+        return Results.BadRequest("请上传 PNG 或 MP4，或粘贴 ComfyUI workflow JSON");
 
     log.LogInformation(">>> [prompt] 文件=[{FileName}] 大小={Len} jsonLen={JL}",
         file?.FileName, file?.Length ?? 0, jsonBody?.Length ?? 0);
@@ -612,56 +612,89 @@ app.MapPost("/api/image/prompt", async (HttpContext context) =>
         int width = 0, height = 0;
         string? fileName = file?.FileName;
 
+        // 判断是否为视频
+        static bool IsVideoFile(string? name)
+        {
+            if (string.IsNullOrEmpty(name)) return false;
+            var e = Path.GetExtension(name).ToLowerInvariant();
+            return e is ".mp4" or ".mov" or ".webm" or ".mkv" or ".avi" or ".m4v" or ".flv";
+        }
+
+        void ApplyTag(string key, string val)
+        {
+            if (string.IsNullOrWhiteSpace(val)) return;
+            texts.Add(new { keyword = key, value = val });
+
+            var keyLower = key.ToLowerInvariant();
+            // 去掉 stream[0]. 前缀再判断
+            var pureKey = keyLower;
+            var idx = pureKey.LastIndexOf('.');
+            if (idx >= 0) pureKey = pureKey[(idx + 1)..];
+
+            if (pureKey is "parameters" or "sd-metadata")
+                parameters ??= val;
+            else if (pureKey is "prompt" or "positive_prompt" or "positive")
+                mainPrompt ??= val;
+            else if (pureKey is "negative_prompt" or "negative prompt" or "negative")
+                negativePrompt ??= val;
+            else if (pureKey is "workflow" or "comfyui")
+                workflow ??= val;
+            else if (pureKey is "comment" or "description" or "title" or "synopsis" or "handler_name" or "copyright")
+            {
+                if (val.TrimStart().StartsWith('{') && parameters == null)
+                    parameters = val;
+                else if (mainPrompt == null && val.Length > 20) // 太短的可能是编码器名
+                    mainPrompt = val;
+            }
+            // 任意看起来像长文本的也收进 mainPrompt 候选
+            else if (mainPrompt == null && val.Length > 40 &&
+                     (val.Contains(',') || val.Contains('\n') || val.TrimStart().StartsWith('{')))
+            {
+                mainPrompt = val;
+            }
+        }
+
         if (file != null)
         {
-            await using var stream = file.OpenReadStream();
-            using var image = await Image.LoadAsync(stream);
-            width = image.Width;
-            height = image.Height;
-
-            var pngMeta = image.Metadata.GetPngMetadata();
-            foreach (var t in pngMeta.TextData)
+            if (IsVideoFile(file.FileName))
             {
-                var key = t.Keyword ?? "";
-                var val = t.Value ?? "";
-                texts.Add(new { keyword = key, value = val });
+                // ---------- 视频：用 ffprobe 提取元数据标签 ----------
+                await using var stream = file.OpenReadStream();
+                var tags = await VideoFfmpeg.ExtractMetadataTagsAsync(stream, file.FileName);
+                foreach (var (key, val) in tags)
+                    ApplyTag(key, val);
 
-                var keyLower = key.ToLowerInvariant();
-                if (keyLower is "parameters" or "sd-metadata")
-                    parameters ??= val;
-                else if (keyLower is "prompt")
-                    mainPrompt ??= val;
-                else if (keyLower is "negative_prompt" or "negative prompt")
-                    negativePrompt ??= val;
-                else if (keyLower is "workflow" or "comfyui")
-                    workflow ??= val;
-                else if (keyLower is "comment" or "description")
-                {
-                    if (val.TrimStart().StartsWith('{') && parameters == null)
-                        parameters = val;
-                    else if (mainPrompt == null && val.Length > 0)
-                        mainPrompt = val;
-                }
+                log.LogInformation(">>> [prompt] 视频元数据标签数={Count}", tags.Count);
             }
-
-            var exif = image.Metadata.ExifProfile;
-            if (exif != null)
+            else
             {
-                void AddExifString(string label, string? v)
+                // ---------- 图片：ImageSharp 读 PNG 文本块 + EXIF ----------
+                await using var stream = file.OpenReadStream();
+                using var image = await Image.LoadAsync(stream);
+                width = image.Width;
+                height = image.Height;
+
+                var pngMeta = image.Metadata.GetPngMetadata();
+                foreach (var t in pngMeta.TextData)
+                    ApplyTag(t.Keyword ?? "", t.Value ?? "");
+
+                var exif = image.Metadata.ExifProfile;
+                if (exif != null)
                 {
-                    if (string.IsNullOrWhiteSpace(v)) return;
-                    texts.Add(new { keyword = "Exif:" + label, value = v });
-                    if (mainPrompt == null && (label is "ImageDescription" or "UserComment" or "XPComment"))
-                        mainPrompt = v;
+                    void AddExifString(string label, string? v)
+                    {
+                        if (string.IsNullOrWhiteSpace(v)) return;
+                        ApplyTag("Exif:" + label, v);
+                    }
+                    if (exif.TryGetValue(SixLabors.ImageSharp.Metadata.Profiles.Exif.ExifTag.ImageDescription, out var desc) && desc?.Value != null)
+                        AddExifString("ImageDescription", desc.Value);
+                    if (exif.TryGetValue(SixLabors.ImageSharp.Metadata.Profiles.Exif.ExifTag.Software, out var soft) && soft?.Value != null)
+                        AddExifString("Software", soft.Value);
+                    if (exif.TryGetValue(SixLabors.ImageSharp.Metadata.Profiles.Exif.ExifTag.XPComment, out var xpc) && xpc?.Value != null)
+                        AddExifString("XPComment", xpc.Value);
+                    if (exif.TryGetValue(SixLabors.ImageSharp.Metadata.Profiles.Exif.ExifTag.UserComment, out var uc) && uc?.Value != null)
+                        AddExifString("UserComment", uc.Value.Text);
                 }
-                if (exif.TryGetValue(SixLabors.ImageSharp.Metadata.Profiles.Exif.ExifTag.ImageDescription, out var desc) && desc?.Value != null)
-                    AddExifString("ImageDescription", desc.Value);
-                if (exif.TryGetValue(SixLabors.ImageSharp.Metadata.Profiles.Exif.ExifTag.Software, out var soft) && soft?.Value != null)
-                    AddExifString("Software", soft.Value);
-                if (exif.TryGetValue(SixLabors.ImageSharp.Metadata.Profiles.Exif.ExifTag.XPComment, out var xpc) && xpc?.Value != null)
-                    AddExifString("XPComment", xpc.Value);
-                if (exif.TryGetValue(SixLabors.ImageSharp.Metadata.Profiles.Exif.ExifTag.UserComment, out var uc) && uc?.Value != null)
-                    AddExifString("UserComment", uc.Value.Text);
             }
         }
 
@@ -713,15 +746,68 @@ app.MapPost("/api/image/prompt", async (HttpContext context) =>
         // 去重保序
         var purePrompts = pureList.Distinct(StringComparer.Ordinal).ToList();
 
-        // 若 mainPrompt 本身是 JSON，用解析出的「最短非 system、像用户指令」的那条作为主 prompt
-        if (!string.IsNullOrEmpty(mainPrompt) && mainPrompt.TrimStart().StartsWith('{') && purePrompts.Count > 0)
+        // 从 purePrompts 里挑最像「自然语言用户 Prompt」的一条当主显示
+        // 规则：排除 system(#开头)、公式/代码、极短串；优先长描述、含中文或常见 prompt 结构
+        static string? PickBestUserPrompt(IReadOnlyList<string> candidates)
         {
-            // 优先取较短、不含 # 标题的用户指令（system prompt 通常很长且以 # 开头）
-            var userLike = purePrompts
-                .Where(s => !s.TrimStart().StartsWith('#') && s.Length < 2000)
-                .OrderBy(s => s.Length)
-                .FirstOrDefault();
-            mainPrompt = userLike ?? purePrompts.OrderBy(s => s.Length).First();
+            if (candidates == null || candidates.Count == 0) return null;
+
+            static bool LooksLikeFormulaOrCode(string s)
+            {
+                var t = s.Trim();
+                if (t.Length < 12) return true;
+                // 数学表达式 / 函数调用感很重
+                if (t.Contains("round(") || t.Contains("max(") || t.Contains("min(")
+                    || t.Contains("% 17") || t.Contains("math.") || t.StartsWith("return ")
+                    || (t.Count(c => c is '(' or ')') >= 4 && t.Count(c => c == '*') >= 1))
+                    return true;
+                // 几乎全是符号/数字
+                int letter = t.Count(char.IsLetter);
+                return letter < t.Length * 0.25;
+            }
+
+            static bool LooksLikeSystem(string s) =>
+                s.TrimStart().StartsWith('#') || s.StartsWith("You are ", StringComparison.OrdinalIgnoreCase)
+                || s.StartsWith("System:", StringComparison.OrdinalIgnoreCase);
+
+            var scored = candidates
+                .Select((s, i) =>
+                {
+                    int score = 0;
+                    var t = s.Trim();
+                    if (LooksLikeSystem(t)) score -= 1000;
+                    if (LooksLikeFormulaOrCode(t)) score -= 500;
+                    if (t.Length < 20) score -= 200;
+                    if (t.Length > 40) score += 50;
+                    if (t.Length > 80) score += 80;
+                    if (t.Length > 150) score += 40;
+                    // 含中文加分（很多视频工具中文 prompt）
+                    if (t.Any(c => c >= 0x4E00 && c <= 0x9FFF)) score += 120;
+                    // 常见自然语言特征
+                    if (t.Contains(' ') || t.Contains('，') || t.Contains('。') || t.Contains(',')) score += 30;
+                    // 原始顺序靠前略加分（保序倾向）
+                    score += Math.Max(0, 20 - i);
+                    if (t.Length > 2500) score -= 100;
+                    return (s, score);
+                })
+                .OrderByDescending(x => x.score)
+                .ToList();
+
+            return scored.FirstOrDefault().s;
+        }
+
+        // mainPrompt 是 JSON / 公式 / 过短时，用 purePrompts 里最好的一条覆盖
+        bool mainIsJson = !string.IsNullOrEmpty(mainPrompt) && mainPrompt.TrimStart().StartsWith('{');
+        bool mainLooksBad = string.IsNullOrEmpty(mainPrompt)
+            || mainIsJson
+            || (mainPrompt!.Length < 30 && purePrompts.Count > 0)
+            || (purePrompts.Count > 0 && purePrompts.Any(p => p.Length > mainPrompt.Length * 2));
+
+        if (mainLooksBad && purePrompts.Count > 0)
+        {
+            var best = PickBestUserPrompt(purePrompts);
+            if (!string.IsNullOrEmpty(best))
+                mainPrompt = best;
         }
 
         var hasAny = texts.Count > 0 || purePrompts.Count > 0;
@@ -742,7 +828,7 @@ app.MapPost("/api/image/prompt", async (HttpContext context) =>
     }
     catch (UnknownImageFormatException)
     {
-        return Results.BadRequest("无法识别为图片，请上传 PNG，或粘贴 ComfyUI workflow JSON");
+        return Results.BadRequest("无法识别为图片，请上传 PNG / MP4，或粘贴 ComfyUI workflow JSON");
     }
     catch (Exception ex)
     {

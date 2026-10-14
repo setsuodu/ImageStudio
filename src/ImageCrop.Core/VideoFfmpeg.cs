@@ -413,6 +413,116 @@ public static class VideoFfmpeg
         return (proc.ExitCode, stderr.ToString());
     }
 
+    static async Task<(int ExitCode, string Stdout, string Stderr)> RunFfprobeAsync(string arguments, CancellationToken ct)
+    {
+        var psi = new ProcessStartInfo
+        {
+            FileName = "ffprobe",
+            Arguments = arguments,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true
+        };
+        using var proc = new Process { StartInfo = psi };
+        var stdout = new StringBuilder();
+        var stderr = new StringBuilder();
+        proc.OutputDataReceived += (_, e) => { if (e.Data != null) stdout.AppendLine(e.Data); };
+        proc.ErrorDataReceived += (_, e) => { if (e.Data != null) stderr.AppendLine(e.Data); };
+        proc.Start();
+        proc.BeginOutputReadLine();
+        proc.BeginErrorReadLine();
+        await proc.WaitForExitAsync(ct);
+        return (proc.ExitCode, stdout.ToString(), stderr.ToString());
+    }
+
+    /// <summary>
+    /// 用 ffprobe 提取视频文件全部元数据标签（format.tags + streams[].tags）。
+    /// 返回 (keyword, value) 列表，便于与 PNG 元数据统一处理。
+    /// </summary>
+    public static async Task<List<(string Keyword, string Value)>> ExtractMetadataTagsAsync(
+        Stream inputStream,
+        string originalFileName,
+        CancellationToken ct = default)
+    {
+        var result = new List<(string, string)>();
+        var ext = Path.GetExtension(originalFileName);
+        if (string.IsNullOrEmpty(ext)) ext = ".mp4";
+
+        var workDir = Path.Combine(Path.GetTempPath(), "imagestudio-meta-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(workDir);
+        var inputPath = Path.Combine(workDir, "input" + ext);
+
+        try
+        {
+            await using (var fs = File.Create(inputPath))
+            {
+                await inputStream.CopyToAsync(fs, ct);
+            }
+
+            // JSON 输出，便于解析
+            var args = $"-v quiet -print_format json -show_format -show_streams \"{inputPath}\"";
+            var (exitCode, stdout, stderr) = await RunFfprobeAsync(args, ct);
+            if (exitCode != 0 || string.IsNullOrWhiteSpace(stdout))
+            {
+                // 失败时仍尝试用 -show_entries 简单文本
+                args = $"-v quiet -show_entries format_tags:stream_tags -of default=noprint_wrappers=1 \"{inputPath}\"";
+                (exitCode, stdout, stderr) = await RunFfprobeAsync(args, ct);
+                if (exitCode != 0) return result;
+
+                // 解析 TAG:key=value 行
+                foreach (var line in stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+                {
+                    if (line.StartsWith("TAG:", StringComparison.OrdinalIgnoreCase))
+                    {
+                        var kv = line[4..].Split('=', 2);
+                        if (kv.Length == 2 && !string.IsNullOrWhiteSpace(kv[1]))
+                            result.Add((kv[0].Trim(), kv[1].Trim()));
+                    }
+                }
+                return result;
+            }
+
+            using var doc = System.Text.Json.JsonDocument.Parse(stdout);
+            var root = doc.RootElement;
+
+            void CollectTags(System.Text.Json.JsonElement tagsEl, string prefix)
+            {
+                if (tagsEl.ValueKind != System.Text.Json.JsonValueKind.Object) return;
+                foreach (var prop in tagsEl.EnumerateObject())
+                {
+                    var val = prop.Value.GetString();
+                    if (!string.IsNullOrWhiteSpace(val))
+                        result.Add((prefix + prop.Name, val));
+                }
+            }
+
+            if (root.TryGetProperty("format", out var fmt) &&
+                fmt.TryGetProperty("tags", out var fmtTags))
+            {
+                CollectTags(fmtTags, "");
+            }
+
+            if (root.TryGetProperty("streams", out var streams) &&
+                streams.ValueKind == System.Text.Json.JsonValueKind.Array)
+            {
+                int i = 0;
+                foreach (var s in streams.EnumerateArray())
+                {
+                    if (s.TryGetProperty("tags", out var stags))
+                        CollectTags(stags, $"stream[{i}].");
+                    i++;
+                }
+            }
+        }
+        finally
+        {
+            TryDeleteDir(workDir);
+        }
+
+        return result;
+    }
+
     static string Truncate(string s, int max) =>
         string.IsNullOrEmpty(s) ? "" : (s.Length <= max ? s : s[..max] + "...");
 }
