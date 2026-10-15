@@ -223,11 +223,8 @@
 
                 <!-- FFmpeg 视频工具专页 -->
                 <div id="ffmpeg-ui" style="display:none;">
-                    <div class="upload-drop-zone" id="ffmpegDropZone" onclick="document.getElementById('ffmpegFileInput').click()">
-                        <span id="ffmpegDropText">点击或拖拽 视频文件到这里（MP4 / MKV / MOV / AVI / WEBM / FLV ...）</span>
-                        <input type="file" id="ffmpegFileInput" hidden accept="video/*,.mp4,.mkv,.avi,.mov,.webm,.flv,.wmv,.m4v" onchange="handleFfmpegFile(this.files[0])">
-                    </div>
-                    <div class="config-bar" style="flex-wrap:wrap; gap:12px; align-items:center;">
+                    <!-- 工具选择固定在最上方，不随子工具切换而移动 -->
+                    <div class="config-bar" style="flex-wrap:wrap; gap:12px; align-items:center; margin-bottom:12px;">
                         <label>工具:
                             <select id="ffmpegTool" onchange="onFfmpegToolChange()">
                                 <option value="tomp4">视频转 MP4（含 FLV→MP4）</option>
@@ -239,6 +236,10 @@
                                 <option value="concat">视频拼接（多段首尾相接）</option>
                             </select>
                         </label>
+                    </div>
+                    <div class="upload-drop-zone" id="ffmpegDropZone" onclick="document.getElementById('ffmpegFileInput').click()">
+                        <span id="ffmpegDropText">点击或拖拽 视频文件到这里（MP4 / MKV / MOV / AVI / WEBM / FLV ...）</span>
+                        <input type="file" id="ffmpegFileInput" hidden accept="video/*,.mp4,.mkv,.avi,.mov,.webm,.flv,.wmv,.m4v" onchange="handleFfmpegFile(this.files[0])">
                     </div>
                     <div id="ffmpegParams" class="config-bar" style="flex-wrap:wrap; gap:12px;"></div>
                     <div style="margin:12px 0;">
