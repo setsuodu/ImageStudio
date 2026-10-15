@@ -149,6 +149,7 @@
                 <div class="tab" onclick="switchMode('prompt', this)">Prompt 提取</div>
                 <div class="tab" onclick="switchMode('audio', this)">音视频转换</div>
                 <div class="tab" onclick="switchMode('ffmpeg', this)">FFmpeg 工具</div>
+                <div class="tab" onclick="switchMode('rescalc', this)">分辨率计算器</div>
             </div>
 
             <div class="editor-area">
@@ -235,6 +236,7 @@
                                 <option value="frames">视频转序列帧 (zip)</option>
                                 <option value="split">水平等分（左/右/两侧）</option>
                                 <option value="aspect">修改视频比例（16:9 / 4:3 / 1:1 ...）</option>
+                                <option value="concat">视频拼接（多段首尾相接）</option>
                             </select>
                         </label>
                     </div>
@@ -250,8 +252,62 @@
                         · 改码率：<code>ffmpeg -i in.mp4 -b:v 3000k -c:v libx264 -c:a copy out.mp4</code><br>
                         · 抽帧：<code>ffmpeg -i in.mp4 -r 24 frame_%03d.png</code><br>
                         · 水平左半：<code>ffmpeg -i in.mp4 -vf "crop=iw/2:ih:0:0" left.mp4</code><br>
-                        · 改比例：<code>ffmpeg -i in.mp4 -vf "scale=...pad=..." -c:v libx264 out.mp4</code>（pad 黑边 / crop 裁切）
+                        · 改比例：<code>ffmpeg -i in.mp4 -vf "scale=...pad=..." -c:v libx264 out.mp4</code>（pad 黑边 / crop 裁切）<br>
+                        · 拼接：<code>ffmpeg -f concat -safe 0 -i list.txt -c copy out.mp4</code>（多段首尾相接）
                     </div>
+                </div>
+
+                <!-- 分辨率计算器 -->
+                <div id="rescalc-ui" style="display:none;">
+                    <div style="background:#2563eb; border-radius:12px; padding:24px 20px 32px; color:#fff; max-width:640px; margin:0 auto;">
+                        <div id="resRatioBar" style="display:flex; flex-wrap:wrap; gap:8px; justify-content:center; margin-bottom:28px;">
+                            <button class="res-ratio-btn active" data-ratio="16:9" onclick="setResRatio(this)">16:9</button>
+                            <button class="res-ratio-btn" data-ratio="21:9" onclick="setResRatio(this)">21:9</button>
+                            <button class="res-ratio-btn" data-ratio="4:3" onclick="setResRatio(this)">4:3</button>
+                            <button class="res-ratio-btn" data-ratio="1.618:1" onclick="setResRatio(this)">1.618:1</button>
+                            <button class="res-ratio-btn" data-ratio="1.414:1" onclick="setResRatio(this)">1.414:1</button>
+                            <button class="res-ratio-btn" data-ratio="1:1" onclick="setResRatio(this)">1:1</button>
+                            <button class="res-ratio-btn" data-ratio="9:16" onclick="setResRatio(this)">9:16</button>
+                            <button class="res-ratio-btn" data-ratio="3:2" onclick="setResRatio(this)">3:2</button>
+                            <button class="res-ratio-btn" data-ratio="2:3" onclick="setResRatio(this)">2:3</button>
+                            <button class="res-ratio-btn" data-ratio="custom" onclick="setResRatio(this)">自定义</button>
+                        </div>
+                        <div id="resCustomRatio" style="display:none; text-align:center; margin-bottom:16px;">
+                            <input type="text" id="resCustomInput" placeholder="如 2.35:1 或 21:9" style="width:140px; padding:6px 10px; border:none; border-radius:6px; font-size:14px;" oninput="onCustomRatioChange()">
+                        </div>
+                        <div style="display:flex; align-items:center; justify-content:center; gap:24px;">
+                            <div style="text-align:center;">
+                                <div style="font-size:13px; opacity:0.85; margin-bottom:6px;">宽度</div>
+                                <input type="number" id="resWidth" value="1920" min="1" max="16384" style="width:110px; font-size:28px; font-weight:bold; text-align:center; background:transparent; border:none; color:#fff; outline:none;" oninput="onResDimChange('w')">
+                            </div>
+                            <div style="font-size:28px; opacity:0.6;">×</div>
+                            <div style="text-align:center;">
+                                <div style="font-size:13px; opacity:0.85; margin-bottom:6px;">高度</div>
+                                <input type="number" id="resHeight" value="1080" min="1" max="16384" style="width:110px; font-size:28px; font-weight:bold; text-align:center; background:transparent; border:none; color:#fff; outline:none;" oninput="onResDimChange('h')">
+                            </div>
+                        </div>
+                        <div style="text-align:center; margin-top:20px; font-size:13px; opacity:0.8;">
+                            当前比例 <span id="resCurrentRatio">16:9</span> · 锁定等比 · 改一边自动算另一边
+                        </div>
+                    </div>
+                    <style>
+                        .res-ratio-btn {
+                            background: rgba(255,255,255,0.15);
+                            border: none;
+                            color: #fff;
+                            padding: 8px 14px;
+                            border-radius: 8px;
+                            cursor: pointer;
+                            font-size: 14px;
+                            transition: background 0.15s;
+                        }
+                        .res-ratio-btn:hover { background: rgba(255,255,255,0.25); }
+                        .res-ratio-btn.active {
+                            background: #fff;
+                            color: #2563eb;
+                            font-weight: 600;
+                        }
+                    </style>
                 </div>
 
                 <!-- PNG / MP4 Prompt 提取 UI -->
@@ -309,7 +365,7 @@
         let loadedFile = null;
 
         function switchMode(mode, el) {
-            const specialModes = ['qrcode', 'audio', 'ffmpeg', 'prompt'];
+            const specialModes = ['qrcode', 'audio', 'ffmpeg', 'prompt', 'rescalc'];
             document.getElementById('image-process-ui').style.display = specialModes.includes(mode) ? 'none' : 'block';
             document.getElementById('qrcode-ui').style.display = mode === 'qrcode' ? 'block' : 'none';
             var au = document.getElementById('audio-ui');
@@ -318,6 +374,8 @@
             if (ff) ff.style.display = mode === 'ffmpeg' ? 'block' : 'none';
             var pu = document.getElementById('prompt-ui');
             if (pu) pu.style.display = mode === 'prompt' ? 'block' : 'none';
+            var rc = document.getElementById('rescalc-ui');
+            if (rc) rc.style.display = mode === 'rescalc' ? 'block' : 'none';
 
             currentMode = mode;
             document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
@@ -330,7 +388,7 @@
             if (mode === 'qrcode') {
                 imgUI.style.display = 'none';
                 qrUI.style.display = 'block';
-            } else if (mode === 'audio' || mode === 'ffmpeg' || mode === 'prompt') {
+            } else if (mode === 'audio' || mode === 'ffmpeg' || mode === 'prompt' || mode === 'rescalc') {
                 imgUI.style.display = 'none';
                 qrUI.style.display = 'none';
                 if (mode === 'ffmpeg') onFfmpegToolChange();
@@ -552,6 +610,11 @@
         function onFfmpegToolChange() {
             const tool = document.getElementById('ffmpegTool').value;
             const box = document.getElementById('ffmpegParams');
+            // 视频拼接用自己的多 Node 区，隐藏顶部单文件拖放框
+            const dropZone = document.getElementById('ffmpegDropZone');
+            if (dropZone) {
+                dropZone.style.display = (tool === 'concat') ? 'none' : '';
+            }
             if (tool === 'tomp4') {
                 box.innerHTML = `
                     <label><input type="checkbox" id="ffReencode"> 强制重新编码（默认优先 -c copy 只换容器）</label>
@@ -628,14 +691,73 @@
                     </label>
                     <span style="font-size:12px;color:#888;">例：9:16 → 3:4 选「缩放拉伸」= 540×960 直接变成 720×960</span>
                 `;
+            } else if (tool === 'concat') {
+                box.innerHTML = `
+                    <div style="width:100%;">
+                        <div style="margin-bottom:8px;">
+                            <label style="font-size:13px;">拖拽或选择视频（可多次添加，每个生成一个 Node）：</label>
+                            <input type="file" id="concatFileInput" accept="video/*,.mp4,.mkv,.avi,.mov,.webm,.flv,.wmv,.m4v" multiple style="margin-left:8px;" onchange="Array.from(this.files).forEach(f=>addConcatNode(f)); this.value='';">
+                        </div>
+                        <div id="concatNodes" style="min-height:60px; border:1px dashed #ccc; border-radius:6px; padding:8px; background:#fafafa;"></div>
+                        <label style="margin-top:10px; display:block;"><input type="checkbox" id="ffConcatReencode"> 强制重新编码（默认优先 -c copy）</label>
+                        <span style="font-size:12px;color:#888;">对应: ffmpeg -f concat -safe 0 -i list.txt -c copy out.mp4</span>
+                    </div>
+                `;
+                renderConcatNodes();
+                // 绑定拖放
+                const nodesBox = document.getElementById('concatNodes');
+                if (nodesBox) {
+                    nodesBox.ondragover = (e) => { e.preventDefault(); nodesBox.style.borderColor = '#0078d4'; };
+                    nodesBox.ondragleave = () => { nodesBox.style.borderColor = '#ccc'; };
+                    nodesBox.ondrop = (e) => {
+                        e.preventDefault();
+                        nodesBox.style.borderColor = '#ccc';
+                        Array.from(e.dataTransfer.files).forEach(f => {
+                            if (f.type.startsWith('video/') || /\.(mp4|mkv|avi|mov|webm|flv|wmv|m4v)$/i.test(f.name))
+                                addConcatNode(f);
+                        });
+                    };
+                }
             }
         }
         async function processFfmpeg() {
+            const tool = document.getElementById('ffmpegTool').value;
+            if (tool === 'concat') {
+                if (concatFiles.length < 2) {
+                    document.getElementById('ffmpegMsg').innerText = '请至少添加 2 个视频 Node';
+                    return;
+                }
+                const fd = new FormData();
+                concatFiles.forEach(item => fd.append('files', item.file));
+                let url = '/api/video/concat';
+                if (document.getElementById('ffConcatReencode')?.checked) url += '?reencode=1';
+                document.getElementById('ffmpegMsg').innerText = '拼接中，请稍候（大文件可能需要较长时间）...';
+                try {
+                    const resp = await fetch(url, { method: 'POST', body: fd });
+                    if (!resp.ok) {
+                        let err = await resp.text();
+                        try { err = JSON.parse(err).error || err; } catch(_){}
+                        document.getElementById('ffmpegMsg').innerText = '失败: ' + err;
+                        return;
+                    }
+                    const blob = await resp.blob();
+                    const a = document.createElement('a');
+                    const cd = resp.headers.get('Content-Disposition') || '';
+                    let name = parseDownloadFilename(cd, 'concat.mp4');
+                    a.href = URL.createObjectURL(blob);
+                    a.download = name;
+                    a.click();
+                    URL.revokeObjectURL(a.href);
+                    document.getElementById('ffmpegMsg').innerText = `成功：已下载 ${name} (${(blob.size/1024/1024).toFixed(2)} MB)`;
+                } catch (e) {
+                    document.getElementById('ffmpegMsg').innerText = '请求失败: ' + e.message;
+                }
+                return;
+            }
             if (!ffmpegFile) {
                 document.getElementById('ffmpegMsg').innerText = '请先上传视频文件';
                 return;
             }
-            const tool = document.getElementById('ffmpegTool').value;
             const fd = new FormData();
             fd.append('file', ffmpegFile);
             let url = '';
@@ -851,6 +973,105 @@
             dz.ondragleave = () => dz.classList.remove('dragover');
             dz.ondrop = (e) => { e.preventDefault(); dz.classList.remove('dragover'); handlePromptFile(e.dataTransfer.files[0]); };
         })();
+
+        // ===== 分辨率计算器 =====
+        let currentResRatio = 16 / 9;
+        let currentResRatioLabel = '16:9';
+        let resLock = true; // 锁定等比
+
+        function parseRatioStr(s) {
+            s = (s || '').trim();
+            if (!s) return null;
+            if (s.includes(':')) {
+                const parts = s.split(':');
+                const a = parseFloat(parts[0]), b = parseFloat(parts[1]);
+                if (a > 0 && b > 0) return a / b;
+            } else {
+                const n = parseFloat(s);
+                if (n > 0) return n;
+            }
+            return null;
+        }
+
+        function setResRatio(btn) {
+            document.querySelectorAll('.res-ratio-btn').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            const r = btn.dataset.ratio;
+            const customBox = document.getElementById('resCustomRatio');
+            if (r === 'custom') {
+                customBox.style.display = 'block';
+                const custom = document.getElementById('resCustomInput').value;
+                const parsed = parseRatioStr(custom);
+                if (parsed) {
+                    currentResRatio = parsed;
+                    currentResRatioLabel = custom || '自定义';
+                }
+            } else {
+                customBox.style.display = 'none';
+                currentResRatio = parseRatioStr(r);
+                currentResRatioLabel = r;
+            }
+            document.getElementById('resCurrentRatio').innerText = currentResRatioLabel;
+            // 以宽度为准重算高度
+            const w = parseInt(document.getElementById('resWidth').value) || 1920;
+            const h = Math.round(w / currentResRatio);
+            document.getElementById('resHeight').value = h;
+        }
+
+        function onCustomRatioChange() {
+            const custom = document.getElementById('resCustomInput').value;
+            const parsed = parseRatioStr(custom);
+            if (parsed) {
+                currentResRatio = parsed;
+                currentResRatioLabel = custom;
+                document.getElementById('resCurrentRatio').innerText = currentResRatioLabel;
+                const w = parseInt(document.getElementById('resWidth').value) || 1920;
+                document.getElementById('resHeight').value = Math.round(w / currentResRatio);
+            }
+        }
+
+        function onResDimChange(which) {
+            if (!resLock || !currentResRatio) return;
+            if (which === 'w') {
+                const w = parseInt(document.getElementById('resWidth').value) || 0;
+                if (w > 0) document.getElementById('resHeight').value = Math.round(w / currentResRatio);
+            } else {
+                const h = parseInt(document.getElementById('resHeight').value) || 0;
+                if (h > 0) document.getElementById('resWidth').value = Math.round(h * currentResRatio);
+            }
+        }
+
+        // ===== FFmpeg 视频拼接 (多 Node) =====
+        let concatFiles = []; // {file, id}
+
+        function addConcatNode(file) {
+            if (!file) return;
+            const id = 'n' + Date.now() + Math.random().toString(36).slice(2, 6);
+            concatFiles.push({ file, id });
+            renderConcatNodes();
+        }
+
+        function removeConcatNode(id) {
+            concatFiles = concatFiles.filter(x => x.id !== id);
+            renderConcatNodes();
+        }
+
+        function renderConcatNodes() {
+            const box = document.getElementById('concatNodes');
+            if (!box) return;
+            if (concatFiles.length === 0) {
+                box.innerHTML = '<div style="color:#999;font-size:13px;padding:12px;">拖拽或选择视频，每个文件生成一个 Node（至少 2 个）</div>';
+                return;
+            }
+            box.innerHTML = concatFiles.map((item, idx) => `
+                <div style="display:flex;align-items:center;gap:10px;background:#f5f5f5;border:1px solid #ddd;border-radius:6px;padding:8px 12px;margin-bottom:8px;">
+                    <span style="background:#0078d4;color:#fff;width:22px;height:22px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-size:12px;flex-shrink:0;">${idx + 1}</span>
+                    <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px;" title="${item.file.name}">${item.file.name}</span>
+                    <span style="color:#888;font-size:12px;flex-shrink:0;">${(item.file.size/1024/1024).toFixed(2)} MB</span>
+                    <button onclick="removeConcatNode('${item.id}')" title="删除" style="background:#e74c3c;color:#fff;border:none;width:24px;height:24px;border-radius:4px;cursor:pointer;font-size:14px;line-height:1;flex-shrink:0;">×</button>
+                </div>
+            `).join('');
+        }
 
         window.onload = () => {
             switchMode('crop', document.querySelector('.tab'));

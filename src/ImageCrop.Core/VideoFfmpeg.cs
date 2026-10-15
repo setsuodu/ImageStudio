@@ -352,6 +352,85 @@ public static class VideoFfmpeg
         }
     }
 
+    /// <summary>
+    /// 视频拼接：按顺序将多个视频首尾相接。
+    /// 优先尝试 -c copy（同编码时无损快速）；失败则自动重编码为 libx264+aac。
+    /// 下载名 = 第一个文件名 + "_concat.mp4"
+    /// </summary>
+    public static async Task<(string OutputPath, string ContentType, string FileName)> ConcatAsync(
+        IReadOnlyList<(Stream Stream, string FileName)> inputs,
+        bool preferCopy = true,
+        CancellationToken ct = default)
+    {
+        if (inputs == null || inputs.Count < 2)
+            throw new ArgumentException("至少需要 2 个视频文件才能拼接");
+
+        var workDir = Path.Combine(Path.GetTempPath(), "imagestudio-concat-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(workDir);
+        var listPath = Path.Combine(workDir, "list.txt");
+        var outputPath = Path.Combine(workDir, "output.mp4");
+        var inputPaths = new List<string>();
+
+        try
+        {
+            // 写入所有输入文件，并生成 concat demuxer 列表
+            var sbList = new StringBuilder();
+            for (int i = 0; i < inputs.Count; i++)
+            {
+                var (stream, fname) = inputs[i];
+                var ext = Path.GetExtension(fname);
+                if (string.IsNullOrEmpty(ext) || !SupportedVideoExt.Contains(ext))
+                    throw new ArgumentException($"不支持的视频格式: {ext}（文件 {fname}）");
+
+                var inPath = Path.Combine(workDir, $"input_{i}{ext}");
+                await using (var fs = File.Create(inPath))
+                {
+                    await stream.CopyToAsync(fs, ct);
+                }
+                inputPaths.Add(inPath);
+                // concat demuxer 需要绝对路径或相对，且单引号包裹
+                sbList.Append("file '").Append(inPath.Replace("'", "'\\''")).AppendLine("'");
+            }
+            await File.WriteAllTextAsync(listPath, sbList.ToString(), ct);
+
+            string args;
+            int exitCode;
+            string stderr;
+
+            if (preferCopy)
+            {
+                // 尝试无损拼接
+                args = $"-y -f concat -safe 0 -i \"{listPath}\" -c copy \"{outputPath}\"";
+                (exitCode, stderr) = await RunFfmpegAsync(args, ct);
+                if (exitCode != 0 || !File.Exists(outputPath))
+                {
+                    // 失败则重编码
+                    if (File.Exists(outputPath)) try { File.Delete(outputPath); } catch { }
+                    args = $"-y -f concat -safe 0 -i \"{listPath}\" -c:v libx264 -preset fast -crf 23 -c:a aac -b:a 192k -movflags +faststart \"{outputPath}\"";
+                    (exitCode, stderr) = await RunFfmpegAsync(args, ct);
+                }
+            }
+            else
+            {
+                args = $"-y -f concat -safe 0 -i \"{listPath}\" -c:v libx264 -preset fast -crf 23 -c:a aac -b:a 192k -movflags +faststart \"{outputPath}\"";
+                (exitCode, stderr) = await RunFfmpegAsync(args, ct);
+            }
+
+            if (exitCode != 0 || !File.Exists(outputPath))
+                throw new InvalidOperationException($"FFmpeg 拼接失败 (code={exitCode}): {Truncate(stderr, 500)}");
+
+            var finalPath = CopyToFinal(outputPath, ".mp4");
+            var firstName = Path.GetFileNameWithoutExtension(inputs[0].FileName);
+            if (string.IsNullOrWhiteSpace(firstName)) firstName = "video";
+            var outName = firstName + "_concat.mp4";
+            return (finalPath, "video/mp4", outName);
+        }
+        finally
+        {
+            TryDeleteDir(workDir);
+        }
+    }
+
     // ---------- helpers ----------
 
     static async Task<(string WorkDir, string InputPath, string BaseName, string Ext)> PrepareInputAsync(

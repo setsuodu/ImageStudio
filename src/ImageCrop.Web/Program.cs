@@ -514,11 +514,57 @@ app.MapPost("/api/video/tomp4", async (HttpContext context) =>
     catch (Exception ex) { return Results.Json(new { error = ex.Message }, statusCode: 500); }
 });
 
+app.MapPost("/api/video/concat", async (HttpContext context) =>
+{
+    if (!VideoFfmpeg.IsFfmpegAvailable())
+        return Results.Json(new { error = "服务器未安装 ffmpeg" }, statusCode: 503);
+
+    var form = await context.Request.ReadFormAsync();
+    var files = form.Files.GetFiles("files");
+    if (files == null || files.Count < 2)
+        return Results.BadRequest("至少需要上传 2 个视频文件进行拼接");
+
+    long totalSize = 0;
+    foreach (var f in files)
+    {
+        totalSize += f.Length;
+        if (f.Length > VideoMaxBytes)
+            return Results.BadRequest($"单个文件过大: {f.FileName}，限制 {VideoMaxBytes / 1024 / 1024} MB");
+    }
+    if (totalSize > VideoMaxBytes * 3)
+        return Results.BadRequest($"总文件过大，限制约 {VideoMaxBytes * 3 / 1024 / 1024} MB");
+
+    log.LogInformation(">>> [video/concat] 收到 {Count} 个文件，总大小={Len}", files.Count, totalSize);
+
+    bool preferCopy = !string.Equals(context.Request.Query["reencode"], "1", StringComparison.OrdinalIgnoreCase);
+
+    try
+    {
+        var inputs = new List<(Stream, string)>();
+        foreach (var f in files)
+        {
+            inputs.Add((f.OpenReadStream(), f.FileName ?? "input.mp4"));
+        }
+
+        var (outPath, contentType, outName) = await VideoFfmpeg.ConcatAsync(inputs, preferCopy, context.RequestAborted);
+
+        foreach (var (s, _) in inputs) try { s.Dispose(); } catch { }
+
+        log.LogInformation(">>> [video/concat] 返回下载名=[{OutName}]", outName);
+
+        var bytes = await File.ReadAllBytesAsync(outPath);
+        try { File.Delete(outPath); } catch { }
+        return FileBytes(context, bytes, contentType, outName);
+    }
+    catch (ArgumentException ex) { return Results.BadRequest(ex.Message); }
+    catch (Exception ex) { return Results.Json(new { error = ex.Message }, statusCode: 500); }
+});
+
 app.MapGet("/api/video/status", () => Results.Json(new
 {
     ffmpeg = VideoFfmpeg.IsFfmpegAvailable(),
     input = VideoFfmpeg.SupportedVideoExt.OrderBy(x => x).ToArray(),
-    tools = new[] { "trim", "bitrate", "frames", "split", "aspect", "tomp4" }
+    tools = new[] { "trim", "bitrate", "frames", "split", "aspect", "tomp4", "concat" }
 }));
 
 // ---------- 从 ComfyUI workflow / prompt JSON 里抽出纯字符串 Prompt ----------
