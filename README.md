@@ -35,7 +35,7 @@
 
 ## 平台
 
-- Console
+- Console（CLI + 本地 MCP）
 - Web
 
 ## 编译
@@ -87,3 +87,80 @@ docker run -d \
 curl -F "file=@video.mp4" "http://localhost:8070/api/audio/convert?format=mp3&bitrate=192" -o out.mp3
 curl -F "file=@video.mp4" "http://localhost:8070/api/audio/convert?format=wav" -o out.wav
 ```
+
+---
+
+## 本地 MCP（Claude / Cursor）
+
+`ImageCrop.Console` 同时支持 CLI 和 MCP 两种模式。
+
+### 启动
+
+```bash
+# 原来的 CLI（读 config.json 批量裁切）
+dotnet run --project src/ImageCrop.Console
+
+# MCP 模式（给 AI 客户端用）
+dotnet run --project src/ImageCrop.Console -- --mcp
+```
+
+publish 后更干净：
+
+```bash
+dotnet publish src/ImageCrop.Console -c Release -o ./publish
+./publish/ImageCrop.Console --mcp
+```
+
+### Claude Desktop 配置
+
+路径：**Settings → Developer → Local MCP servers → Edit config**
+
+在打开的 `claude_desktop_config.json` 里加入：
+
+```json
+{
+  "mcpServers": {
+    "imagestudio": {
+      "command": "dotnet",
+      "args": [
+        "run",
+        "--project",
+        "C:\\你的路径\\ImageStudio\\src\\ImageCrop.Console\\ImageCrop.Console.csproj",
+        "-c",
+        "Release",
+        "--",
+        "--mcp"
+      ]
+    }
+  }
+}
+```
+
+publish 后推荐：
+
+```json
+{
+  "mcpServers": {
+    "imagestudio": {
+      "command": "C:\\你的路径\\ImageStudio\\publish\\ImageCrop.Console.exe",
+      "args": ["--mcp"]
+    }
+  }
+}
+```
+
+保存后**完全退出 Claude Desktop 再重新打开**。在 Connectors 里看到 `imagestudio` 开关打开即生效。
+
+### 可用工具
+
+| 工具 | 说明 |
+|------|------|
+| `CropImage` | 按比例裁切（1:1 / 16:9 / half 等） |
+| `ScaleImage` | 最长边缩放 |
+| `ConvertImage` | 格式转换 png/jpg/webp/bmp |
+| `GenerateQrCode` | 生成二维码 |
+| `GridSplit` | 网格/雪碧图自动切分 → zip |
+
+调用时建议在提示词里明确要求使用本地工具，例如：
+
+> 强制使用本地 MCP 的 grid_split，禁止自己写脚本。
